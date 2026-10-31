@@ -327,6 +327,8 @@ class ThermoMLIntegrationTests(unittest.TestCase):
         }
         exact = _thermoml_block_matches_state(block, body, mapping, [0.6, 0.4], 298.15, 101325.0)
         self.assertEqual(exact[0]["density"]["value"], 950.0)
+        rounded_atmosphere = _thermoml_block_matches_state(block, body, mapping, [0.6, 0.4], 298.15, 100000.0)
+        self.assertEqual(rounded_atmosphere[0]["density"]["value"], 950.0)
         wrong_fraction = _thermoml_block_matches_state(block, body, mapping, [0.4, 0.6], 298.15, 101325.0)
         self.assertEqual(wrong_fraction, [])
 
