@@ -349,6 +349,17 @@ class ThermoIntegrationTests(unittest.TestCase):
 
 
 class LLMIntegrationTests(unittest.TestCase):
+    def test_missing_temperature_and_pressure_is_asked_before_model_call(self):
+        from llm_client import _missing_state_condition
+        self.assertEqual(_missing_state_condition("查一下水的物性参数"), ["温度", "压力"])
+        self.assertEqual(_missing_state_condition("查 25℃ 常压下水的密度"), [])
+
+    @patch("llm_client.chat_completion")
+    def test_missing_state_never_calls_model_tool(self, chat):
+        results, reply = run_tool_loop("查一下水的物性参数", [], {"base_url": "local", "model": "test"})
+        self.assertEqual(results, [])
+        self.assertIn("温度和压力", reply)
+        chat.assert_not_called()
     def test_explicit_property_names_are_extracted_without_expanding_to_full_packet(self):
         from llm_client import _explicit_target_properties
         self.assertEqual(_explicit_target_properties("查335 K常压下乙酸乙酯的密度和泡点"), ["density", "bubble_point"])
@@ -379,7 +390,7 @@ class LLMIntegrationTests(unittest.TestCase):
         }
         expected = {"status": "ok", "properties": {"density": {"value": 1.0}}}
         query = lambda **kwargs: expected
-        results, reply = run_tool_loop("查水的密度", [], {"base_url": "local", "model": "test"}, property_query=query)
+        results, reply = run_tool_loop("查298 K常压下水的密度", [], {"base_url": "local", "model": "test"}, property_query=query)
         self.assertEqual(results, [expected])
         self.assertIn("后端物性查询", reply)
         self.assertEqual(chat.call_count, 1)
@@ -399,7 +410,7 @@ class LLMIntegrationTests(unittest.TestCase):
         def query(**kwargs):
             received.update(kwargs)
             return {"status": "ok"}
-        run_tool_loop("查询水的密度", [], {"base_url": "local", "model": "test"}, property_query=query)
+        run_tool_loop("查询298 K常压下水的密度", [], {"base_url": "local", "model": "test"}, property_query=query)
         self.assertEqual(received["target_properties"], ["density"])
 
     @patch("llm_client.requests.post")

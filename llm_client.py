@@ -244,6 +244,14 @@ def _explicit_target_properties(user_text: str) -> list[str] | None:
     return selected or None
 
 
+def _missing_state_condition(user_text: str) -> list[str]:
+    """在调用模型前拦截没有温度/压力的查询，避免模型自行补默认值。"""
+    text = user_text.casefold()
+    has_temperature = bool(__import__("re").search(r"(?:\d+(?:\.\d*)?|\.\d+)\s*(?:k(?![a-z])|℃|℉|°\s*[cf]|摄氏度|华氏度|开尔文)", text, __import__("re").IGNORECASE))
+    has_pressure = any(token in text for token in ("常压", "大气压", "atmospheric pressure")) or bool(__import__("re").search(r"(?:\d+(?:\.\d*)?|\.\d+)\s*(?:mpa|kpa|pa|bar|atm)(?![a-z])", text, __import__("re").IGNORECASE))
+    return [name for name, present in (("温度", has_temperature), ("压力", has_pressure)) if not present]
+
+
 def dispatch_tool(name: str, raw_arguments: str | dict[str, Any]) -> dict[str, Any]:
     """只运行白名单中的本地 Python 工具，不执行模型生成代码。"""
     if name != "query_properties":
@@ -279,6 +287,11 @@ def run_tool_loop(
     ]
     tool_schema = [query_properties_tool_schema()]
     explicit_targets = _explicit_target_properties(user_text)
+    missing_conditions = _missing_state_condition(user_text)
+    # 仅对明确的物性查询拦截缺少状态点；普通工具循环测试/非物性对话不强行添加条件。
+    has_property_intent = bool(_explicit_target_properties(user_text)) or any(term in user_text.casefold() for term in ("物性", "property", "查询", "查一下", "查找"))
+    if missing_conditions and has_property_intent:
+        return [], "请补充明确的" + "和".join(missing_conditions) + "后再查询；系统不会自行假设温度或压力。"
     results: list[dict[str, Any]] = []
     for _ in range(max_rounds):
         assistant_message = chat_completion(messages, tool_schema, config)

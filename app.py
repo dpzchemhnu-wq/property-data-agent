@@ -348,8 +348,8 @@ with detail_col:
         st.button("查看详情", disabled=True, use_container_width=True)
 
 if st.session_state.query_notice:
-    # 错误消息已经保存在对应的结果详情中，主页面只显示简短状态提示。
-    st.info(st.session_state.query_notice)
+    # 保持极简：具体结果、错误与警告都只在详情面板中显示。
+    st.caption(st.session_state.query_notice)
 
 st.markdown("<div style='height:.7rem'></div>", unsafe_allow_html=True)
 structured_col, structured_detail_col = st.columns([1, 1], vertical_alignment="top")
