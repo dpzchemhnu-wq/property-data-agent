@@ -146,7 +146,15 @@ def _coverage_label(nist_status: Any, thermoml_status: Any, pure_component: bool
         if isinstance(thermoml_status, dict) and thermoml_status.get("applicable") is False:
             thermoml_label = "暂不支持该物性的直接解析"
         else:
-            thermoml_label = f"{len(data)} 项" if data else "未命中状态点"
+            if data:
+                thermoml_label = f"{len(data)} 项"
+            elif isinstance(thermoml_status, dict) and thermoml_status.get("candidate_count"):
+                thermoml_label = (
+                    f"未命中状态点（候选 {thermoml_status.get('candidate_count')}，"
+                    f"已核验 {thermoml_status.get('documents_inspected', 0)} 篇）"
+                )
+            else:
+                thermoml_label = "未命中状态点"
     return f"参考源状态：NIST WebBook {nist_label} · ThermoML {thermoml_label}（详情可展开）"
 
 
@@ -284,13 +292,18 @@ def render_result(result: dict[str, Any]) -> None:
 st.set_page_config(page_title="物性数据查询", page_icon="⚗️", layout="centered")
 st.markdown("""
 <style>
-.block-container {max-width: 980px; padding-top: 2.2rem; padding-bottom: 3rem;}
-[data-testid="stAppViewContainer"] {background: linear-gradient(180deg, #f7f9fc 0%, #ffffff 280px);}
-[data-testid="stHeader"] {background: transparent;}
-.hero-title {text-align:center; font-size:2.05rem; font-weight:750; letter-spacing:.01em; margin:.6rem 0 .35rem; color:#172033;}
-.hero-caption {text-align:center; color:#667085; margin:0 auto 1.7rem; max-width:700px;}
-div[data-testid="stForm"] {border:1px solid #e4e8ef; border-radius:18px; padding:1rem; background:#fff; box-shadow:0 8px 28px rgba(20,35,60,.06);}
-div[data-testid="stPopover"] button {border-radius:12px;}
+/* 学术数据工作台：低饱和底色、窄边框和稳定的表格层级，避免营销式渐变。 */
+.block-container {max-width: 1080px; padding-top: 2rem; padding-bottom: 3rem;}
+[data-testid="stAppViewContainer"] {background:#eef2f5;}
+[data-testid="stHeader"] {background:transparent;}
+.hero-title {text-align:center; font-size:2rem; font-weight:700; letter-spacing:0; margin:.55rem 0 .3rem; color:#17324d;}
+.hero-caption {text-align:center; color:#536779; margin:0 auto 1.55rem; max-width:720px; font-size:.94rem;}
+div[data-testid="stForm"] {border:1px solid #cbd6df; border-radius:8px; padding:1rem; background:#ffffff; box-shadow:0 3px 12px rgba(22,48,72,.07);}
+div[data-testid="stPopover"] button {border-radius:7px; border:1px solid #b9c8d5; color:#17324d;}
+div[data-testid="stFormSubmitButton"] button, div[data-testid="stButton"] button[kind="primary"] {border-radius:7px; background:#176b78; border-color:#176b78;}
+[data-testid="stDataFrame"] {border:1px solid #cbd6df; border-radius:7px; background:#fff;}
+div[data-testid="stExpander"] {border:1px solid #cbd6df; border-radius:7px; background:#fff;}
+div[data-testid="stAlert"] {border-radius:7px;}
 @media (max-width: 640px) {
   .block-container {padding:1.1rem .8rem 2rem;}
   .hero-title {font-size:1.6rem;}
