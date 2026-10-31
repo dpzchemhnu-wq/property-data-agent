@@ -102,6 +102,22 @@ def _load_component_aliases() -> dict[str, str]:
     return aliases
 
 
+BUILTIN_CHINESE_NORMALIZATIONS = {
+    "乙苯": "ethylbenzene",
+    "乙基苯": "ethylbenzene",
+    "苯乙烷": "ethylbenzene",
+    "甲苯": "toluene",
+    "甲基苯": "toluene",
+    "苯": "benzene",
+    "甲醇": "methanol",
+    "木醇": "methanol",
+    "乙醇": "ethanol",
+    "酒精": "ethanol",
+    "水": "water",
+    "氧化氢": "water",
+}
+
+
 @lru_cache(maxsize=1024)
 def _pubchem_name_lookup(name: str) -> tuple[str, str]:
     """本地目录未命中时访问 PubChem PUG REST，用规范名称反查 CAS。"""
@@ -157,6 +173,7 @@ def _resolve_components(names: list[str]) -> list[Component]:
         try:
             normalized_name = name.strip()
             lookup_name = aliases.get(normalized_name.casefold(), normalized_name)
+            lookup_name = BUILTIN_CHINESE_NORMALIZATIONS.get(normalized_name, lookup_name)
             if lookup_name in AMBIGUOUS_COMPONENT_CAS:
                 raise LookupError(AMBIGUOUS_COMPONENT_CAS[lookup_name])
             try:
@@ -1031,11 +1048,51 @@ def query_properties(
         # CAS 与 xs 保持同一索引顺序，避免库内部按名称排序导致组成错配。
         mixture = Mixture(IDs=[c.cas for c in resolved], zs=xs, T=T, P=P)
         phase = str(getattr(mixture, "phase", "")).lower()
+        gas_phase = phase in {"g", "gas", "v", "vapor"}
+        if gas_phase:
+            requested = list(dict.fromkeys(target_properties))
+            partial_properties: dict[str, Any] = {}
+            if "enthalpy" in requested:
+                partial_properties["enthalpy"] = {
+                    **_number_from_mixture(mixture, "气相摩尔焓", "Hm", 1e-3),
+                    "unit": "kJ/mol", "phase": "gas",
+                    "reference_state": "thermo 库默认焓基准；使用前须与下游模型对齐零点",
+                    "source_ids": ["thermo_Mixture_gas_default_v1"],
+                }
+            if "bubble_point" in requested:
+                try:
+                    gas_bubble = _bubble_point(xs, P, resolved, model, parameter_rows, ledger, mixture)
+                    partial_properties["bubble_point"] = {
+                        "value": gas_bubble, "unit": "K",
+                        "source_ids": [f"thermo_{model}_bubble_v1"] + [str(row["source_id"]) for row in parameter_rows],
+                    }
+                except Exception:
+                    pass
+            unavailable = [name for name in requested if name not in partial_properties]
+            return _failure(
+                "out_of_domain",
+                "当前温度和压力下组分处于气态；未返回液相密度、液相粘度、表面张力或液相热导率。请降低温度或提高压力后重查。",
+                phase_state="single_gas_detected",
+                components=[{"name": c.input_name, "cas": c.cas} for c in resolved],
+                mole_fractions=xs, T_K=T, P_Pa=P,
+                partial_properties=partial_properties,
+                unavailable_properties=unavailable,
+                warnings=["当前状态为气态；液相物性不适用。仅展示明确可计算的气相焓/泡点。"],
+            )
         if phase and phase not in {"l", "liquid"}:
-            return _failure("solver_failed", f"液相假设未通过底层相态检查（thermo phase={phase}）；未返回液相性质。")
+            return _failure("solver_failed", "当前状态无法确认液相，未返回不可靠的液相数据。")
         bubble_temperature = _bubble_point(xs, P, resolved, model, parameter_rows, ledger, mixture)
         if T >= bubble_temperature:
-            return _failure("solver_failed", f"给定温度不低于计算泡点（{bubble_temperature:.4f} K）；液相假设未通过，未返回液相性质。")
+            return _failure(
+                "out_of_domain",
+                f"当前状态已超过泡点（约 {bubble_temperature:.2f} K），物质不是液体；液相物性未返回。请降低温度或提高压力。",
+                phase_state="single_gas_or_vapor_detected",
+                components=[{"name": c.input_name, "cas": c.cas} for c in resolved],
+                mole_fractions=xs,
+                T_K=T,
+                P_Pa=P,
+                bubble_point_K=bubble_temperature,
+            )
 
         # 只计算并返回用户勾选/请求的物性；泡点仍在内部计算，用于确认输入状态确实为液相。
         requested = list(dict.fromkeys(target_properties))
