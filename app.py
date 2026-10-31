@@ -332,7 +332,6 @@ selected_view = st.sidebar.radio("工作模块", ["物性数据查询", "流程�
 if selected_view == "流程模拟调用":
     render_simulation_page()
     st.stop()
-
 st.markdown('<div class="hero-title">⚗️ 物性数据查询</div>', unsafe_allow_html=True)
 st.markdown('<div class="hero-caption">描述组分、配比、温度和压力即可查询。系统会整理单位与参数，物性数值由后端计算。</div>', unsafe_allow_html=True)
 llm_config = _load_llm_config()

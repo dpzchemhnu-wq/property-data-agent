@@ -105,6 +105,12 @@ python aspen_bridge.py
 
 桥接服务默认只监听 `127.0.0.1:8765`。使用 Cloudflare Tunnel 或组织批准的 HTTPS 隧道将其映射为稳定 HTTPS 地址；不要直接把 8765 端口暴露到公网。在 Render 环境变量中私密设置 `ASPEN_BRIDGE_URL` 为该 HTTPS 地址，`ASPEN_BRIDGE_TOKEN` 填同一令牌。`render.yaml` 已声明这两个环境变量。桥接进程必须保持在 Aspen 登录用户的桌面会话中运行，Aspen 关闭或用户注销后查询将不可用。
 
+仓库提供 `Start Aspen Bridge.ps1`：在 Aspen Windows 主机上运行会安装项目依赖（包括 Windows 的 `pywin32`）、生成本次运行的随机令牌并启动只读桥接。首次运行的令牌只显示在本机终端，需通过 Render 私密环境变量设置 `ASPEN_BRIDGE_TOKEN`。脚本默认只监听本机回环地址，不会自行暴露公网端口。
+
+Render 还需要一条从互联网到 Aspen 主机的 HTTPS 通道。临时演示可在 Aspen 主机另开 PowerShell 窗口运行 `cloudflared tunnel --url http://127.0.0.1:8765`，将其生成的 HTTPS 地址填入 Render 的 `ASPEN_BRIDGE_URL`。Quick Tunnel 的地址会在隧道重启后变化；长期演示应由项目所有者在 Cloudflare 配置具名 Tunnel/固定域名，或使用学校批准的 VPN/反向代理。不要将桥接改成 `0.0.0.0` 监听或直接开放 8765 入站端口。
+
+验证连接时先在 Aspen 主机浏览器访问 `http://127.0.0.1:8765/health`，应返回服务健康状态；再到网页点击“扫描正在运行的 Aspen 案例”。健康检查仅验证桥接进程，不代表 Aspen 案例可读。必须由同一个 Windows 用户会话打开 Aspen，且案例已停止计算、错误数为 0，才能读取。桥接本身不会启动、修改或保存 BKP 文件。
+
 当前开发机没有 Aspen Plus、`Apwn.Document` 注册或真实 BKP，因此 COM 对象模型、状态路径和特定 Aspen 版本的流股节点尚不能在此机完成集成验证。代码采用严格失败关闭；真实安装后的第一轮部署仍需在目标 Aspen 版本上核验节点路径和单位表。自动化测试使用伪造的 COM 对象树验证转换和门控，不代表 Aspen 联调通过。
 
 测试：在项目 Python 环境中运行 `python -m unittest test_tools.py -v`。

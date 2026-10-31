@@ -50,7 +50,6 @@ class QueryValidationTests(unittest.TestCase):
         result = query_properties(["water"], None, 298.15, 101325, ["density"])
         self.assertEqual(result["status"], "needs_input")
 
-
     @patch("tools._thermoml_lookup", return_value={"covered": False, "data": {}, "records": []})
     def test_positive_fraction_sum_is_normalized(self, _thermoml_lookup):
         result = query_properties(["water", "ethanol"], [0.6, 0.3], 298.15, 101325, ["density"])
@@ -86,7 +85,6 @@ class QueryValidationTests(unittest.TestCase):
         self.assertIn("density", result["partial_properties"])
         self.assertEqual(result["partial_properties"]["density"]["phase"], "gas")
         self.assertNotIn("surface_tension", result["partial_properties"])
-
     @patch.dict("os.environ", {"COMPONENT_ALIAS_FILE": "X:/missing/component_aliases.json"})
     def test_builtin_chinese_aliases_work_without_alias_json_file(self):
         from tools import _resolve_components
