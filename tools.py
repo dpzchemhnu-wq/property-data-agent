@@ -1017,13 +1017,24 @@ def query_properties(
     if not isinstance(mole_fractions, list) or len(mole_fractions) != len(components):
         return _failure("needs_input", "组分数与摩尔分数个数必须一致，且顺序一一对应。")
     try:
-        xs = [_finite_number(x, f"mole_fractions[{i}]") for i, x in enumerate(mole_fractions)]
+        input_xs = [_finite_number(x, f"mole_fractions[{i}]") for i, x in enumerate(mole_fractions)]
         T = _finite_number(T_K, "T_K")
         P = _finite_number(P_Pa, "P_Pa")
     except ValueError as exc:
         return _failure("needs_input", str(exc))
-    if any(x < 0 or x > 1 for x in xs) or abs(sum(xs) - 1.0) > 1e-6:
-        return _failure("needs_input", "摩尔分数必须位于 [0,1]，且加和为 1.0（容差 1e-6）；系统不会自动归一化。")
+    if any(x < 0 for x in input_xs):
+        return _failure("needs_input", "摩尔分数/配比不能为负数；请检查各组分的输入值。")
+    fraction_total = sum(input_xs)
+    if fraction_total <= 0:
+        return _failure("needs_input", "摩尔分数/配比总和必须大于 0；不能全部填写为 0。")
+    normalization_applied = abs(fraction_total - 1.0) > 1e-6
+    # 允许输入 5:1、0.5:0.5 或任意正比例；交给 thermo 前统一归一化。
+    xs = [value / fraction_total for value in input_xs]
+    normalization_warning = (
+        f"已将输入摩尔分数/配比 [{', '.join(f'{value:g}' for value in input_xs)}] "
+        f"按总和 {fraction_total:g} 归一化为 [{', '.join(f'{value:.6g}' for value in xs)}]。"
+        if normalization_applied else ""
+    )
     if T < T_MIN_K or T > T_MAX_K or P < P_MIN_PA or P > P_MAX_PA:
         return _failure("out_of_domain", f"拒绝外推：安全温度范围为 {T_MIN_K:.2f}–{T_MAX_K:.2f} K，压力范围为 {P_MIN_PA:g}–{P_MAX_PA:g} Pa。")
     if not isinstance(target_properties, list) or not target_properties:
@@ -1074,10 +1085,11 @@ def query_properties(
                 "当前温度和压力下组分处于气态；未返回液相密度、液相粘度、表面张力或液相热导率。请降低温度或提高压力后重查。",
                 phase_state="single_gas_detected",
                 components=[{"name": c.input_name, "cas": c.cas} for c in resolved],
-                mole_fractions=xs, T_K=T, P_Pa=P,
+                mole_fractions=xs, input_mole_fractions=input_xs, T_K=T, P_Pa=P,
                 partial_properties=partial_properties,
                 unavailable_properties=unavailable,
-                warnings=["当前状态为气态；液相物性不适用。仅展示明确可计算的气相焓/泡点。"],
+                warnings=["当前状态为气态；液相物性不适用。仅展示明确可计算的气相焓/泡点。"]
+                + ([normalization_warning] if normalization_warning else []),
             )
         if phase and phase not in {"l", "liquid"}:
             return _failure("solver_failed", "当前状态无法确认液相，未返回不可靠的液相数据。")
@@ -1089,9 +1101,11 @@ def query_properties(
                 phase_state="single_gas_or_vapor_detected",
                 components=[{"name": c.input_name, "cas": c.cas} for c in resolved],
                 mole_fractions=xs,
+                input_mole_fractions=input_xs,
                 T_K=T,
                 P_Pa=P,
                 bubble_point_K=bubble_temperature,
+                warnings=[normalization_warning] if normalization_warning else [],
             )
 
         # 只计算并返回用户勾选/请求的物性；泡点仍在内部计算，用于确认输入状态确实为液相。
@@ -1176,10 +1190,13 @@ def query_properties(
         if not references:
             warnings.append("外部参考源没有返回本状态点可直接比较的数值；参考栏标明未覆盖，不以模型值替代。")
         warnings.extend(comparison_warnings)
+        if normalization_warning:
+            warnings.append(normalization_warning)
         return {
             "status": "ok",
             "components": [{"name": c.input_name, "cas": c.cas} for c in resolved],
             "mole_fractions": xs,
+            "input_mole_fractions": input_xs,
             "T_K": T,
             "P_Pa": P,
             "properties": properties,
@@ -1204,7 +1221,7 @@ def query_properties_tool_schema() -> dict[str, Any]:
                 "type": "object",
                 "properties": {
                     "components": {"type": "array", "items": {"type": "string"}, "description": "组分名称列表，顺序由用户输入决定并严格保留。"},
-                    "mole_fractions": {"type": "array", "items": {"type": "number"}, "description": "与组分一一对应的摩尔分数，纯物质为 [1.0]。"},
+                    "mole_fractions": {"type": "array", "items": {"type": "number"}, "description": "与组分一一对应的非负摩尔分数或比例；总和不必为 1，后端会按总和自动归一化，纯物质可填 [1.0]。"},
                     "T_K": {"type": "number", "description": "温度，K。"},
                     "P_Pa": {"type": "number", "description": "压力，Pa。"},
                     "target_properties": {"type": "array", "items": {"type": "string", "enum": list(TARGET_PROPERTIES)}, "description": "目标物性。"},
