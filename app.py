@@ -277,13 +277,9 @@ st.session_state.results = [
 if "query_notice" not in st.session_state:
     st.session_state.query_notice = ""
 
-# 查询记录只保存在右侧详情面板；主页面不再重复渲染历史结果或错误详情。
-for entry in st.session_state.chat_history:
-    if entry.get("role") == "user":
-        with st.chat_message("user"):
-            st.write(entry["content"])
-
-# 自然语言输入与提交居中；结果明细不再铺满主页面，统一收进右侧详情按钮。
+# 查询记录只保存在会话状态和“查看详情”面板；主页面不渲染历史输入气泡。
+# 这样连续查询时不会把用户之前输入的一条条内容铺在页面上。
+# 自然语言输入与提交居中；结果明细统一收进右侧详情按钮。
 input_col, detail_col = st.columns([10, 1.3], vertical_alignment="bottom")
 with input_col:
     with st.form("natural_query_form", clear_on_submit=True, border=False):
