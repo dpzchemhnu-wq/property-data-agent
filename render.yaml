@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: property-data-agent
+    runtime: docker
+    plan: free
+    healthCheckPath: /_stcore/health
+    envVars:
+      # 在托管平台控制台中私密填写；不要提交到代码仓库。
+      - key: API_KEY
+        sync: false

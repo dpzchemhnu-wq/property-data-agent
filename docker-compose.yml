@@ -1,0 +1,12 @@
+services:
+  property-agent:
+    build: .
+    container_name: property-data-agent
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    environment:
+      API_KEY: ${API_KEY:-}
+      BINARY_PARAMETER_LEDGER: /app/data/parameter_ledger.json
+    volumes:
+      - ./data:/app/data
