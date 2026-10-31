@@ -1048,11 +1048,31 @@ def query_properties(
         # CAS 与 xs 保持同一索引顺序，避免库内部按名称排序导致组成错配。
         mixture = Mixture(IDs=[c.cas for c in resolved], zs=xs, T=T, P=P)
         phase = str(getattr(mixture, "phase", "")).lower()
+        gas_phase = phase in {"g", "gas", "v", "vapor"}
+        if gas_phase:
+            return _failure(
+                "out_of_domain",
+                "当前温度和压力下该组分处于气态，液相密度、液相粘度和表面张力不适用；请降低温度或提高压力后再查液相数据。",
+                phase_state="single_gas_detected",
+                components=[{"name": c.input_name, "cas": c.cas} for c in resolved],
+                mole_fractions=xs,
+                T_K=T,
+                P_Pa=P,
+            )
         if phase and phase not in {"l", "liquid"}:
-            return _failure("solver_failed", f"液相假设未通过底层相态检查（thermo phase={phase}）；未返回液相性质。")
+            return _failure("solver_failed", "当前状态无法确认液相，未返回不可靠的液相数据。")
         bubble_temperature = _bubble_point(xs, P, resolved, model, parameter_rows, ledger, mixture)
         if T >= bubble_temperature:
-            return _failure("solver_failed", f"给定温度不低于计算泡点（{bubble_temperature:.4f} K）；液相假设未通过，未返回液相性质。")
+            return _failure(
+                "out_of_domain",
+                f"当前状态已超过泡点（约 {bubble_temperature:.2f} K），物质不是液体；液相物性未返回。请降低温度或提高压力。",
+                phase_state="single_gas_or_vapor_detected",
+                components=[{"name": c.input_name, "cas": c.cas} for c in resolved],
+                mole_fractions=xs,
+                T_K=T,
+                P_Pa=P,
+                bubble_point_K=bubble_temperature,
+            )
 
         # 只计算并返回用户勾选/请求的物性；泡点仍在内部计算，用于确认输入状态确实为液相。
         requested = list(dict.fromkeys(target_properties))

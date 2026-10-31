@@ -33,6 +33,12 @@ class QueryValidationTests(unittest.TestCase):
         result = query_properties(["water"], [1.0], 451.0, 101325, ["density"])
         self.assertEqual(result["status"], "out_of_domain")
 
+    def test_vapor_state_returns_clear_liquid_property_message(self):
+        result = query_properties(["water"], [1.0], 400.0, 101325.0, ["density"])
+        self.assertEqual(result["status"], "out_of_domain")
+        self.assertIn("气态", result["message"])
+        self.assertEqual(result["phase_state"], "single_gas_detected")
+
     @patch.dict("os.environ", {"COMPONENT_ALIAS_FILE": "X:/missing/component_aliases.json"})
     def test_builtin_chinese_aliases_work_without_alias_json_file(self):
         from tools import _resolve_components

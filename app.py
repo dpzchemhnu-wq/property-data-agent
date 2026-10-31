@@ -119,6 +119,8 @@ def render_result(result: dict[str, Any]) -> None:
     status = result.get("status", "solver_failed")
     if status != "ok":
         message = f"{status}: {result.get('message', '')}"
+        if result.get("phase_state") in {"single_gas_detected", "single_gas_or_vapor_detected"}:
+            st.caption("当前状态：气态；液相物性未返回。")
         if status in {"needs_input", "out_of_domain"}:
             st.caption("本次查询：🔴 0 项错误，🟡 1 项需要补充或检查。")
             with st.expander("查看详情", expanded=False):
@@ -249,7 +251,7 @@ div[data-testid="stPopover"] button {border-radius:12px;}
 }
 </style>
 """, unsafe_allow_html=True)
-st.markdown('<div class="hero-title">⚗️ 物性数据 Agent</div>', unsafe_allow_html=True)
+st.markdown('<div class="hero-title">⚗️ 物性数据查询</div>', unsafe_allow_html=True)
 st.markdown('<div class="hero-caption">描述组分、配比、温度和压力即可查询。系统会整理单位与参数，物性数值由后端计算。</div>', unsafe_allow_html=True)
 llm_config = _load_llm_config()
 
@@ -347,9 +349,7 @@ with detail_col:
     else:
         st.button("查看详情", disabled=True, use_container_width=True)
 
-if st.session_state.query_notice:
-    # 保持极简：具体结果、错误与警告都只在详情面板中显示。
-    st.caption(st.session_state.query_notice)
+# 不在主页面渲染查询状态气泡；成功、警告和错误均在对应详情面板中查看。
 
 st.markdown("<div style='height:.7rem'></div>", unsafe_allow_html=True)
 structured_col, structured_detail_col = st.columns([1, 1], vertical_alignment="top")
@@ -398,7 +398,7 @@ if submitted_structured:
         fractions = [float(part) for part in split_values(fractions_text)]
         structured_result = query_properties(component_names, fractions, temperature, pressure, selected_properties)
         st.session_state.results.append({"prompt": "结构化查询：" + "、".join(component_names), "result": structured_result})
-        st.session_state.query_notice = "结构化查询已完成。点击上方右侧“查看详情”查看结果。"
+        st.session_state.query_notice = ""
         st.rerun()
     except ValueError as exc:
         st.session_state.query_notice = f"请检查组分或摩尔分数格式：{exc}"
