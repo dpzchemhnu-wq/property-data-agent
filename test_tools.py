@@ -33,6 +33,18 @@ class QueryValidationTests(unittest.TestCase):
         result = query_properties(["water"], [1.0], 451.0, 101325, ["density"])
         self.assertEqual(result["status"], "out_of_domain")
 
+    def test_vapor_state_returns_clear_liquid_property_message(self):
+        result = query_properties(["water"], [1.0], 400.0, 101325.0, ["density"])
+        self.assertEqual(result["status"], "out_of_domain")
+        self.assertIn("气态", result["message"])
+        self.assertEqual(result["phase_state"], "single_gas_detected")
+
+    def test_vapor_state_keeps_safe_partial_enthalpy_only(self):
+        result = query_properties(["water"], [1.0], 400.0, 101325.0, ["density", "enthalpy"])
+        self.assertEqual(result["status"], "out_of_domain")
+        self.assertIn("enthalpy", result["partial_properties"])
+        self.assertNotIn("density", result["partial_properties"])
+
     @patch.dict("os.environ", {"COMPONENT_ALIAS_FILE": "X:/missing/component_aliases.json"})
     def test_builtin_chinese_aliases_work_without_alias_json_file(self):
         from tools import _resolve_components
@@ -62,6 +74,15 @@ class QueryValidationTests(unittest.TestCase):
     def test_methanol_chinese_name_resolves_through_catalog(self):
         resolved = _resolve_components(["甲醇"])
         self.assertEqual(resolved[0].cas, "67-56-1")
+
+    def test_common_chinese_ethylbenzene_name_resolves(self):
+        resolved = _resolve_components(["乙苯"])
+        self.assertEqual(resolved[0].cas, "100-41-4")
+
+    def test_ethylbenzene_alias_preserves_user_name(self):
+        result = query_properties(["乙苯"], [1.0], 298.15, 101325.0, ["density"])
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["components"][0]["name"], "乙苯")
 
     @patch("tools.search_chemical")
     @patch("tools.requests.get")
@@ -340,6 +361,17 @@ class ThermoIntegrationTests(unittest.TestCase):
 
 
 class LLMIntegrationTests(unittest.TestCase):
+    def test_missing_temperature_and_pressure_is_asked_before_model_call(self):
+        from llm_client import _missing_state_condition
+        self.assertEqual(_missing_state_condition("查一下水的物性参数"), ["温度", "压力"])
+        self.assertEqual(_missing_state_condition("查 25℃ 常压下水的密度"), [])
+
+    @patch("llm_client.chat_completion")
+    def test_missing_state_never_calls_model_tool(self, chat):
+        results, reply = run_tool_loop("查一下水的物性参数", [], {"base_url": "local", "model": "test"})
+        self.assertEqual(results, [])
+        self.assertIn("温度和压力", reply)
+        chat.assert_not_called()
     def test_explicit_property_names_are_extracted_without_expanding_to_full_packet(self):
         from llm_client import _explicit_target_properties
         self.assertEqual(_explicit_target_properties("查335 K常压下乙酸乙酯的密度和泡点"), ["density", "bubble_point"])
@@ -351,6 +383,7 @@ class LLMIntegrationTests(unittest.TestCase):
         self.assertIn("摄氏度 t 转成 t+273.15", SYSTEM_PROMPT)
         self.assertIn("[5/6, 1/6]", SYSTEM_PROMPT)
         self.assertIn("质量比", SYSTEM_PROMPT)
+        self.assertIn("乙苯”→“ethylbenzene", SYSTEM_PROMPT)
 
     @patch("llm_client.chat_completion")
     def test_tool_result_is_returned_without_second_llm_call(self, chat):
@@ -369,7 +402,7 @@ class LLMIntegrationTests(unittest.TestCase):
         }
         expected = {"status": "ok", "properties": {"density": {"value": 1.0}}}
         query = lambda **kwargs: expected
-        results, reply = run_tool_loop("查水的密度", [], {"base_url": "local", "model": "test"}, property_query=query)
+        results, reply = run_tool_loop("查298 K常压下水的密度", [], {"base_url": "local", "model": "test"}, property_query=query)
         self.assertEqual(results, [expected])
         self.assertIn("后端物性查询", reply)
         self.assertEqual(chat.call_count, 1)
@@ -389,7 +422,7 @@ class LLMIntegrationTests(unittest.TestCase):
         def query(**kwargs):
             received.update(kwargs)
             return {"status": "ok"}
-        run_tool_loop("查询水的密度", [], {"base_url": "local", "model": "test"}, property_query=query)
+        run_tool_loop("查询298 K常压下水的密度", [], {"base_url": "local", "model": "test"}, property_query=query)
         self.assertEqual(received["target_properties"], ["density"])
 
     @patch("llm_client.requests.post")
