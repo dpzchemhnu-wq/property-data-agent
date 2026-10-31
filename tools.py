@@ -818,8 +818,8 @@ def _thermoml_block_matches_state(
             continue
         if abs(point_t - T_K) > max(0.02, T_K * 1e-5):
             continue
-        # 文献通常将常压报告为 101 kPa，故允许 0.5% 的实验状态点取整差；不允许跨越条件做外推。
-        if abs(point_p - P_Pa) > max(1000.0, P_Pa * 0.005):
+        # 文献常把常压写成 100 kPa、101.3 kPa 或 1 atm；允许小范围状态点取整差，仍不做压力插值/外推。
+        if abs(point_p - P_Pa) > max(1500.0, P_Pa * 0.005):
             continue
         composition_ok = True
         seen_org_numbers: set[int] = set()
@@ -899,9 +899,13 @@ def _thermoml_lookup(payload: dict[str, Any], timeout_s: float = 8.0) -> dict[st
         total = 0
         component_map: dict[int, int] | None = None
         inspected = 0
-        # NIST 排序首批候选先验证；每次最多获取 10 个完整 JSON，避免宽查询拖慢对话。
-        for page in range(1):
+        pages_scanned = 0
+        max_documents = 12
+        # 排序前 5 页（最多 100 条候选）中筛选目标体系，再限制完整 JSON 下载数量。
+        # 只看第一页会被含其它溶质的三元体系占满，导致常见二元体系长期误报“未覆盖”。
+        for page in range(5):
             search = _thermoml_search_page(query, page, 20, timeout_s)
+            pages_scanned += 1
             total = int(search.get("size", 0) or 0)
             results = search.get("results", [])
             if not results:
@@ -924,6 +928,8 @@ def _thermoml_lookup(payload: dict[str, Any], timeout_s: float = 8.0) -> dict[st
                 # Require all requested compounds in the summary, then verify each data block below.
                 if len(set(matched_indices)) < len(components):
                     continue
+                if inspected >= max_documents:
+                    break
                 inspected += 1
                 try:
                     body = _thermoml_document(doi, timeout_s)
@@ -965,7 +971,8 @@ def _thermoml_lookup(payload: dict[str, Any], timeout_s: float = 8.0) -> dict[st
                     collected.append({"doi": doi, "title": title, "data": article_data})
                 if len(collected) >= 3:
                     break
-            break
+            if len(collected) >= 3 or inspected >= max_documents:
+                break
         data: dict[str, Any] = {}
         for record in collected:
             for prop, value in record["data"].items():
@@ -973,7 +980,7 @@ def _thermoml_lookup(payload: dict[str, Any], timeout_s: float = 8.0) -> dict[st
         if data:
             return {
                 "covered": True,
-                "message": f"NIST ThermoML Archive 检索到 {total} 条候选记录，检查排序前 {len(results)} 条后找到 {len(collected)} 篇在指定组成、温度和压力下有精确数据点的文献。",
+                "message": f"NIST ThermoML Archive 检索到 {total} 条候选记录，检查前 {pages_scanned * 20} 条候选后找到 {len(collected)} 篇在指定组成、温度和压力下有精确数据点的文献。",
                 "data": data,
                 "records": [{"doi": row["doi"], "title": row["title"], "url": f"{THERMOML_JSON_URL}/{quote(row['doi'], safe='/.-_()')}.json"} for row in collected],
                 "search_url": THERMOML_SEARCH_INFO_URL,
@@ -987,7 +994,7 @@ def _thermoml_lookup(payload: dict[str, Any], timeout_s: float = 8.0) -> dict[st
         elif inspected == 0:
             message = "NIST ThermoML Search API 有候选记录，但未找到完整匹配的组分组合。"
         else:
-            message = f"在检索排序前 {min(total, 20)} 条候选中找到相关 ThermoML 文献，但没有当前组成、温度、压力的直接数据点；未做插值或外推。" if inspected else "ThermoML 官方检索结果未发现可直接核验的组分组合。"
+            message = f"在检索前 {min(total, pages_scanned * 20)} 条候选中找到相关 ThermoML 文献，但没有当前组成、温度、压力的直接数据点；未做插值或外推。" if inspected else "ThermoML 官方检索结果未发现可直接核验的组分组合。"
         return {
             "covered": False, "message": message, "data": {}, "records": [],
             "search_url": THERMOML_SEARCH_INFO_URL, "archive_url": THERMOML_ARCHIVE_URL,
