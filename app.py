@@ -70,6 +70,18 @@ def _missing_parameter_warning(prompt: str, backend_message: str = "") -> str:
     return "无法开始查询，还缺少必要参数。请补充组分、摩尔分数、温度、压力和目标物性。"
 
 
+def _normalization_notice(result: dict[str, Any]) -> str:
+    """为已归一化的结果生成主页面上的简短检查提醒。"""
+    raw = result.get("input_mole_fractions")
+    normalized = result.get("mole_fractions")
+    if not isinstance(raw, list) or not isinstance(normalized, list) or not raw:
+        return ""
+    if abs(sum(float(value) for value in raw) - 1.0) <= 1e-6:
+        return ""
+    total = sum(float(value) for value in raw)
+    return f"组分组成总和为 {total:.6g}，已自动归一化后计算；请检查输入组成是否正确。"
+
+
 def _reference_for(property_data: dict[str, Any], source: str) -> dict[str, Any] | None:
     refs = property_data.get("external_references", {})
     item = refs.get(source) if isinstance(refs, dict) else None
@@ -369,6 +381,13 @@ if submitted_prompt and prompt.strip():
         st.session_state.query_notice = f"本次查询未完成：{exc.__class__.__name__}: {exc}"
         st.session_state.chat_history.append({"role": "assistant", "content": st.session_state.query_notice})
 
+# 归一化不阻断计算，但在查询区下方明确提醒用户复核原始组成。
+if st.session_state.results:
+    latest_result = st.session_state.results[-1].get("result", {})
+    notice = _normalization_notice(latest_result) if isinstance(latest_result, dict) else ""
+    if notice:
+        st.warning(notice)
+
 with detail_col:
     natural_entries = [
         entry for entry in st.session_state.results
@@ -383,7 +402,8 @@ with detail_col:
                     options=list(range(len(normalized_entries))),
                     index=len(normalized_entries) - 1,
                     format_func=lambda index: normalized_entries[index]["prompt"],
-                    key="natural_detail_selector",
+                    # 记录数变化时生成新 key，确保新查询自动选中最新一条。
+                    key=f"natural_detail_selector_{len(normalized_entries)}",
                 )
             else:
                 selected_index = 0
@@ -429,7 +449,7 @@ with structured_detail_col:
                     options=list(range(len(structured_entries))),
                     index=len(structured_entries) - 1,
                     format_func=lambda index: structured_entries[index]["prompt"],
-                    key="structured_detail_selector",
+                    key=f"structured_detail_selector_{len(structured_entries)}",
                 )
             else:
                 selected_structured_index = 0
