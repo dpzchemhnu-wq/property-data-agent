@@ -121,6 +121,16 @@ def render_result(result: dict[str, Any]) -> None:
         message = f"{status}: {result.get('message', '')}"
         if result.get("phase_state") in {"single_gas_detected", "single_gas_or_vapor_detected"}:
             st.caption("当前状态：气态；液相物性未返回。")
+            partial = result.get("partial_properties", {})
+            if partial:
+                st.caption("详情中保留了当前气相下仍可计算的部分数据。")
+                partial_rows = [{
+                    "物性（单位）": f"{TARGET_PROPERTIES.get(key, key)} ({item.get('unit', '')})",
+                    "当前状态值": _bare_value(item.get("value")),
+                    "相态": item.get("phase", "当前状态"),
+                    "来源": ", ".join(item.get("source_ids", [])) or "—",
+                } for key, item in partial.items()]
+                st.dataframe(partial_rows, width="stretch", hide_index=True)
         if status in {"needs_input", "out_of_domain"}:
             st.caption("本次查询：🔴 0 项错误，🟡 1 项需要补充或检查。")
             with st.expander("查看详情", expanded=False):
@@ -235,7 +245,7 @@ def render_result(result: dict[str, Any]) -> None:
         })
 
 
-st.set_page_config(page_title="物性数据 Agent", page_icon="⚗️", layout="centered")
+st.set_page_config(page_title="物性数据查询", page_icon="⚗️", layout="centered")
 st.markdown("""
 <style>
 .block-container {max-width: 980px; padding-top: 2.2rem; padding-bottom: 3rem;}

@@ -1050,14 +1050,34 @@ def query_properties(
         phase = str(getattr(mixture, "phase", "")).lower()
         gas_phase = phase in {"g", "gas", "v", "vapor"}
         if gas_phase:
+            requested = list(dict.fromkeys(target_properties))
+            partial_properties: dict[str, Any] = {}
+            if "enthalpy" in requested:
+                partial_properties["enthalpy"] = {
+                    **_number_from_mixture(mixture, "气相摩尔焓", "Hm", 1e-3),
+                    "unit": "kJ/mol", "phase": "gas",
+                    "reference_state": "thermo 库默认焓基准；使用前须与下游模型对齐零点",
+                    "source_ids": ["thermo_Mixture_gas_default_v1"],
+                }
+            if "bubble_point" in requested:
+                try:
+                    gas_bubble = _bubble_point(xs, P, resolved, model, parameter_rows, ledger, mixture)
+                    partial_properties["bubble_point"] = {
+                        "value": gas_bubble, "unit": "K",
+                        "source_ids": [f"thermo_{model}_bubble_v1"] + [str(row["source_id"]) for row in parameter_rows],
+                    }
+                except Exception:
+                    pass
+            unavailable = [name for name in requested if name not in partial_properties]
             return _failure(
                 "out_of_domain",
-                "当前温度和压力下该组分处于气态，液相密度、液相粘度和表面张力不适用；请降低温度或提高压力后再查液相数据。",
+                "当前温度和压力下组分处于气态；未返回液相密度、液相粘度、表面张力或液相热导率。请降低温度或提高压力后重查。",
                 phase_state="single_gas_detected",
                 components=[{"name": c.input_name, "cas": c.cas} for c in resolved],
-                mole_fractions=xs,
-                T_K=T,
-                P_Pa=P,
+                mole_fractions=xs, T_K=T, P_Pa=P,
+                partial_properties=partial_properties,
+                unavailable_properties=unavailable,
+                warnings=["当前状态为气态；液相物性不适用。仅展示明确可计算的气相焓/泡点。"],
             )
         if phase and phase not in {"l", "liquid"}:
             return _failure("solver_failed", "当前状态无法确认液相，未返回不可靠的液相数据。")
