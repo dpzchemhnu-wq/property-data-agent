@@ -46,6 +46,30 @@ def _compact_notice(text: str, *, success: bool = False) -> str:
     return f"本次查询未完成：{first_line}。详细原因请点击右侧“查看详情”。"
 
 
+def _missing_parameter_warning(prompt: str, backend_message: str = "") -> str:
+    """把后端/模型的泛化缺参信息整理成用户可直接补填的清单。"""
+    _, local_message = parse_explicit_query(prompt)
+    if "请补充：" in local_message:
+        missing = local_message.split("请补充：", 1)[1].rstrip("。")
+        return f"无法开始查询，还缺少：{missing}。请补齐后重新提交。"
+
+    message = str(backend_message or "")
+    # 工具校验信息可能只指出一项；保留原意，同时把提示说清楚。
+    replacements = (
+        ("缺少摩尔分数", "摩尔分数/摩尔比"),
+        ("请提供至少一个非空组分名称", "组分名称"),
+        ("请指定至少一个目标物性", "目标物性"),
+        ("缺少温度", "温度（K）"),
+        ("缺少压力", "压力（Pa）或明确的‘常压’"),
+    )
+    for source, item in replacements:
+        if source in message:
+            return f"无法开始查询，还缺少：{item}。请补齐后重新提交。"
+    if message:
+        return f"无法开始查询：{message}。请补齐缺少参数后重新提交。"
+    return "无法开始查询，还缺少必要参数。请补充组分、摩尔分数、温度、压力和目标物性。"
+
+
 def _reference_for(property_data: dict[str, Any], source: str) -> dict[str, Any] | None:
     refs = property_data.get("external_references", {})
     item = refs.get(source) if isinstance(refs, dict) else None
@@ -276,6 +300,8 @@ st.session_state.results = [
 ]
 if "query_notice" not in st.session_state:
     st.session_state.query_notice = ""
+if "input_warning" not in st.session_state:
+    st.session_state.input_warning = ""
 
 # 查询记录只保存在会话状态和“查看详情”面板；主页面不渲染历史输入气泡。
 # 这样连续查询时不会把用户之前输入的一条条内容铺在页面上。
@@ -295,6 +321,7 @@ with input_col:
 
 if submitted_prompt and prompt.strip():
     prompt = prompt.strip()
+    st.session_state.input_warning = ""
     st.session_state.chat_history.append({"role": "user", "content": prompt})
     try:
         history = [
@@ -309,11 +336,15 @@ if submitted_prompt and prompt.strip():
                 st.session_state.query_notice = _compact_notice("", success=True)
                 st.session_state.chat_history.append({"role": "assistant", "content": "查询已完成。请点击右侧“查看详情”查看结果。"})
             else:
-                st.session_state.query_notice = _compact_notice(str(response))
+                response_text = str(response)
+                if any(item.get("status") == "needs_input" for item in query_results):
+                    st.session_state.input_warning = _missing_parameter_warning(prompt, response_text)
+                st.session_state.query_notice = _compact_notice(response_text)
                 st.session_state.chat_history.append({"role": "assistant", "content": str(response)})
         else:
             safe = _safe_clarification(response)
             st.session_state.results.append({"prompt": prompt, "result": {"status": "needs_input", "message": safe}})
+            st.session_state.input_warning = _missing_parameter_warning(prompt, safe)
             st.session_state.query_notice = _compact_notice(safe)
             st.session_state.chat_history.append({"role": "assistant", "content": safe})
     except LLMServiceError as exc:
@@ -321,14 +352,20 @@ if submitted_prompt and prompt.strip():
         if parsed is not None:
             local_result = query_properties(**parsed)
             st.session_state.results.append({"prompt": prompt, "result": local_result})
+            if local_result.get("status") == "needs_input":
+                st.session_state.input_warning = _missing_parameter_warning(
+                    prompt, str(local_result.get("message", ""))
+                )
             st.session_state.query_notice = "语言解析服务暂不可用，已使用本地规则处理。请点击右侧“查看详情”。"
             st.session_state.chat_history.append({"role": "assistant", "content": st.session_state.query_notice})
         else:
             failure = "语言解析服务暂不可用。" + local_message
             st.session_state.results.append({"prompt": prompt, "result": {"status": "needs_input", "message": failure}})
+            st.session_state.input_warning = _missing_parameter_warning(prompt, failure)
             st.session_state.query_notice = _compact_notice(failure)
             st.session_state.chat_history.append({"role": "assistant", "content": st.session_state.query_notice})
     except Exception as exc:
+        st.session_state.input_warning = "查询暂未完成，请检查组分、摩尔分数、温度、压力和目标物性是否填写完整。"
         st.session_state.query_notice = f"本次查询未完成：{exc.__class__.__name__}: {exc}"
         st.session_state.chat_history.append({"role": "assistant", "content": st.session_state.query_notice})
 
@@ -376,6 +413,9 @@ with structured_col:
         )
         submitted_structured = st.form_submit_button("查询物性", type="primary", use_container_width=True)
 
+if st.session_state.input_warning:
+    st.warning(st.session_state.input_warning)
+
 with structured_detail_col:
     structured_entries = [
         entry for entry in st.session_state.results
@@ -402,10 +442,29 @@ if submitted_structured:
     try:
         component_names = split_values(component_text)
         fractions = [float(part) for part in split_values(fractions_text)]
+        structured_missing: list[str] = []
+        if not component_names:
+            structured_missing.append("组分名称")
+        if not fractions:
+            structured_missing.append("摩尔分数")
+        if not selected_properties:
+            structured_missing.append("目标物性")
+        if structured_missing:
+            st.session_state.input_warning = (
+                "无法开始查询，还缺少：" + "、".join(structured_missing) + "。请补齐后重新提交。"
+            )
+            st.rerun()
         structured_result = query_properties(component_names, fractions, temperature, pressure, selected_properties)
         st.session_state.results.append({"prompt": "结构化查询：" + "、".join(component_names), "result": structured_result})
+        if structured_result.get("status") == "needs_input":
+            st.session_state.input_warning = _missing_parameter_warning(
+                "、".join(component_names), str(structured_result.get("message", ""))
+            )
+        else:
+            st.session_state.input_warning = ""
         st.session_state.query_notice = ""
         st.rerun()
     except ValueError as exc:
-        st.session_state.query_notice = f"请检查组分或摩尔分数格式：{exc}"
+        st.session_state.input_warning = f"无法开始查询，摩尔分数格式有误：{exc}。请按组分顺序填写数字。"
+        st.session_state.query_notice = st.session_state.input_warning
         st.rerun()
