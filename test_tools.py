@@ -25,8 +25,22 @@ class QueryValidationTests(unittest.TestCase):
         result = query_properties(["water"], None, 298.15, 101325, ["density"])
         self.assertEqual(result["status"], "needs_input")
 
-    def test_fraction_sum_is_not_silently_normalized(self):
+    @patch("tools._thermoml_lookup", return_value={"covered": False, "data": {}, "records": []})
+    def test_positive_fraction_sum_is_normalized(self, _thermoml_lookup):
         result = query_properties(["water", "ethanol"], [0.6, 0.3], 298.15, 101325, ["density"])
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["input_mole_fractions"], [0.6, 0.3])
+        self.assertAlmostEqual(sum(result["mole_fractions"]), 1.0)
+        self.assertAlmostEqual(result["mole_fractions"][0], 2 / 3)
+        self.assertAlmostEqual(result["mole_fractions"][1], 1 / 3)
+        self.assertTrue(any("归一化" in warning for warning in result["warnings"]))
+
+    def test_negative_fraction_is_rejected(self):
+        result = query_properties(["water", "ethanol"], [1.2, -0.2], 298.15, 101325, ["density"])
+        self.assertEqual(result["status"], "needs_input")
+
+    def test_all_zero_fractions_are_rejected(self):
+        result = query_properties(["water", "ethanol"], [0.0, 0.0], 298.15, 101325, ["density"])
         self.assertEqual(result["status"], "needs_input")
 
     def test_temperature_domain_is_enforced_before_solver(self):
