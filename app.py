@@ -34,6 +34,18 @@ def _safe_clarification(text: str) -> str:
     return text
 
 
+def _compact_notice(text: str, *, success: bool = False) -> str:
+    """主页面只显示简短状态；具体错误/数值统一放入“查看详情”面板。"""
+    if success:
+        return "查询已完成。请点击右侧“查看详情”查看数据、来源和提醒。"
+    if not text:
+        return "本次查询未完成。请点击右侧“查看详情”查看原因。"
+    first_line = str(text).splitlines()[0].strip()
+    if len(first_line) > 90:
+        first_line = first_line[:87] + "…"
+    return f"本次查询未完成：{first_line}。详细原因请点击右侧“查看详情”。"
+
+
 def _reference_for(property_data: dict[str, Any], source: str) -> dict[str, Any] | None:
     refs = property_data.get("external_references", {})
     item = refs.get(source) if isinstance(refs, dict) else None
@@ -107,6 +119,18 @@ def render_result(result: dict[str, Any]) -> None:
     status = result.get("status", "solver_failed")
     if status != "ok":
         message = f"{status}: {result.get('message', '')}"
+        if result.get("phase_state") in {"single_gas_detected", "single_gas_or_vapor_detected"}:
+            st.caption("当前状态：气态；液相物性未返回。")
+            partial = result.get("partial_properties", {})
+            if partial:
+                st.caption("详情中保留了当前气相下仍可计算的部分数据。")
+                partial_rows = [{
+                    "物性（单位）": f"{TARGET_PROPERTIES.get(key, key)} ({item.get('unit', '')})",
+                    "当前状态值": _bare_value(item.get("value")),
+                    "相态": item.get("phase", "当前状态"),
+                    "来源": ", ".join(item.get("source_ids", [])) or "—",
+                } for key, item in partial.items()]
+                st.dataframe(partial_rows, width="stretch", hide_index=True)
         if status in {"needs_input", "out_of_domain"}:
             st.caption("本次查询：🔴 0 项错误，🟡 1 项需要补充或检查。")
             with st.expander("查看详情", expanded=False):
@@ -221,7 +245,7 @@ def render_result(result: dict[str, Any]) -> None:
         })
 
 
-st.set_page_config(page_title="物性数据 Agent", page_icon="⚗️", layout="centered")
+st.set_page_config(page_title="物性数据查询", page_icon="⚗️", layout="centered")
 st.markdown("""
 <style>
 .block-container {max-width: 980px; padding-top: 2.2rem; padding-bottom: 3rem;}
@@ -237,7 +261,7 @@ div[data-testid="stPopover"] button {border-radius:12px;}
 }
 </style>
 """, unsafe_allow_html=True)
-st.markdown('<div class="hero-title">⚗️ 物性数据 Agent</div>', unsafe_allow_html=True)
+st.markdown('<div class="hero-title">⚗️ 物性数据查询</div>', unsafe_allow_html=True)
 st.markdown('<div class="hero-caption">描述组分、配比、温度和压力即可查询。系统会整理单位与参数，物性数值由后端计算。</div>', unsafe_allow_html=True)
 llm_config = _load_llm_config()
 
@@ -253,9 +277,11 @@ st.session_state.results = [
 if "query_notice" not in st.session_state:
     st.session_state.query_notice = ""
 
+# 查询记录只保存在右侧详情面板；主页面不再重复渲染历史结果或错误详情。
 for entry in st.session_state.chat_history:
-    with st.chat_message(entry["role"]):
-        st.write(entry["content"])
+    if entry.get("role") == "user":
+        with st.chat_message("user"):
+            st.write(entry["content"])
 
 # 自然语言输入与提交居中；结果明细不再铺满主页面，统一收进右侧详情按钮。
 input_col, detail_col = st.columns([10, 1.3], vertical_alignment="bottom")
@@ -284,24 +310,27 @@ if submitted_prompt and prompt.strip():
             for result in query_results:
                 st.session_state.results.append({"prompt": prompt, "result": result})
             if all(item.get("status") == "ok" for item in query_results):
-                st.session_state.query_notice = "查询已完成。点击右侧“查看详情”查看物性表、来源对比和提醒。"
-                st.session_state.chat_history.append({"role": "assistant", "content": "查询已完成。可点击输入框右侧的“查看详情”查看结果。"})
+                st.session_state.query_notice = _compact_notice("", success=True)
+                st.session_state.chat_history.append({"role": "assistant", "content": "查询已完成。请点击右侧“查看详情”查看结果。"})
             else:
-                st.session_state.query_notice = str(response)
+                st.session_state.query_notice = _compact_notice(str(response))
                 st.session_state.chat_history.append({"role": "assistant", "content": str(response)})
         else:
             safe = _safe_clarification(response)
-            st.session_state.query_notice = safe
+            st.session_state.results.append({"prompt": prompt, "result": {"status": "needs_input", "message": safe}})
+            st.session_state.query_notice = _compact_notice(safe)
             st.session_state.chat_history.append({"role": "assistant", "content": safe})
     except LLMServiceError as exc:
         parsed, local_message = parse_explicit_query(prompt)
         if parsed is not None:
             local_result = query_properties(**parsed)
             st.session_state.results.append({"prompt": prompt, "result": local_result})
-            st.session_state.query_notice = "语言解析服务暂不可用，已使用本地规则处理；结果在右侧详情中。"
+            st.session_state.query_notice = "语言解析服务暂不可用，已使用本地规则处理。请点击右侧“查看详情”。"
             st.session_state.chat_history.append({"role": "assistant", "content": st.session_state.query_notice})
         else:
-            st.session_state.query_notice = "语言解析服务暂不可用。" + local_message
+            failure = "语言解析服务暂不可用。" + local_message
+            st.session_state.results.append({"prompt": prompt, "result": {"status": "needs_input", "message": failure}})
+            st.session_state.query_notice = _compact_notice(failure)
             st.session_state.chat_history.append({"role": "assistant", "content": st.session_state.query_notice})
     except Exception as exc:
         st.session_state.query_notice = f"本次查询未完成：{exc.__class__.__name__}: {exc}"
@@ -330,8 +359,7 @@ with detail_col:
     else:
         st.button("查看详情", disabled=True, use_container_width=True)
 
-if st.session_state.query_notice:
-    st.info(st.session_state.query_notice)
+# 不在主页面渲染查询状态气泡；成功、警告和错误均在对应详情面板中查看。
 
 st.markdown("<div style='height:.7rem'></div>", unsafe_allow_html=True)
 structured_col, structured_detail_col = st.columns([1, 1], vertical_alignment="top")
@@ -380,7 +408,7 @@ if submitted_structured:
         fractions = [float(part) for part in split_values(fractions_text)]
         structured_result = query_properties(component_names, fractions, temperature, pressure, selected_properties)
         st.session_state.results.append({"prompt": "结构化查询：" + "、".join(component_names), "result": structured_result})
-        st.session_state.query_notice = "结构化查询已完成。点击上方右侧“查看详情”查看结果。"
+        st.session_state.query_notice = ""
         st.rerun()
     except ValueError as exc:
         st.session_state.query_notice = f"请检查组分或摩尔分数格式：{exc}"
