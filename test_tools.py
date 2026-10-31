@@ -386,6 +386,17 @@ class LLMIntegrationTests(unittest.TestCase):
         self.assertEqual(results, [])
         self.assertIn("温度和压力", reply)
         chat.assert_not_called()
+
+    @patch("llm_client.chat_completion")
+    def test_ratio_is_recognized_but_missing_pressure_still_blocks_query(self, chat):
+        results, reply = run_tool_loop(
+            "查一下 300K 下，乙醇和水按 0.4:0.7 混合的密度",
+            [], {"base_url": "local", "model": "test"},
+        )
+        self.assertEqual(results, [])
+        self.assertIn("压力", reply)
+        self.assertNotIn("摩尔比", reply)
+        chat.assert_not_called()
     def test_explicit_property_names_are_extracted_without_expanding_to_full_packet(self):
         from llm_client import _explicit_target_properties
         self.assertEqual(_explicit_target_properties("查335 K常压下乙酸乙酯的密度和泡点"), ["density", "bubble_point"])
