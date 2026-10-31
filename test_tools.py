@@ -63,6 +63,15 @@ class QueryValidationTests(unittest.TestCase):
         resolved = _resolve_components(["甲醇"])
         self.assertEqual(resolved[0].cas, "67-56-1")
 
+    def test_common_chinese_ethylbenzene_name_resolves(self):
+        resolved = _resolve_components(["乙苯"])
+        self.assertEqual(resolved[0].cas, "100-41-4")
+
+    def test_ethylbenzene_alias_preserves_user_name(self):
+        result = query_properties(["乙苯"], [1.0], 298.15, 101325.0, ["density"])
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["components"][0]["name"], "乙苯")
+
     @patch("tools.search_chemical")
     @patch("tools.requests.get")
     def test_pubchem_fallback_checks_cas_before_returning(self, get, search):
@@ -351,6 +360,7 @@ class LLMIntegrationTests(unittest.TestCase):
         self.assertIn("摄氏度 t 转成 t+273.15", SYSTEM_PROMPT)
         self.assertIn("[5/6, 1/6]", SYSTEM_PROMPT)
         self.assertIn("质量比", SYSTEM_PROMPT)
+        self.assertIn("乙苯”→“ethylbenzene", SYSTEM_PROMPT)
 
     @patch("llm_client.chat_completion")
     def test_tool_result_is_returned_without_second_llm_call(self, chat):

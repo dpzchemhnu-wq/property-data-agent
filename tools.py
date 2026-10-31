@@ -102,6 +102,22 @@ def _load_component_aliases() -> dict[str, str]:
     return aliases
 
 
+BUILTIN_CHINESE_NORMALIZATIONS = {
+    "乙苯": "ethylbenzene",
+    "乙基苯": "ethylbenzene",
+    "苯乙烷": "ethylbenzene",
+    "甲苯": "toluene",
+    "甲基苯": "toluene",
+    "苯": "benzene",
+    "甲醇": "methanol",
+    "木醇": "methanol",
+    "乙醇": "ethanol",
+    "酒精": "ethanol",
+    "水": "water",
+    "氧化氢": "water",
+}
+
+
 @lru_cache(maxsize=1024)
 def _pubchem_name_lookup(name: str) -> tuple[str, str]:
     """本地目录未命中时访问 PubChem PUG REST，用规范名称反查 CAS。"""
@@ -157,6 +173,7 @@ def _resolve_components(names: list[str]) -> list[Component]:
         try:
             normalized_name = name.strip()
             lookup_name = aliases.get(normalized_name.casefold(), normalized_name)
+            lookup_name = BUILTIN_CHINESE_NORMALIZATIONS.get(normalized_name, lookup_name)
             if lookup_name in AMBIGUOUS_COMPONENT_CAS:
                 raise LookupError(AMBIGUOUS_COMPONENT_CAS[lookup_name])
             try:

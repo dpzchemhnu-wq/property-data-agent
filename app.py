@@ -34,6 +34,18 @@ def _safe_clarification(text: str) -> str:
     return text
 
 
+def _compact_notice(text: str, *, success: bool = False) -> str:
+    """主页面只显示简短状态；具体错误/数值统一放入“查看详情”面板。"""
+    if success:
+        return "查询已完成。请点击右侧“查看详情”查看数据、来源和提醒。"
+    if not text:
+        return "本次查询未完成。请点击右侧“查看详情”查看原因。"
+    first_line = str(text).splitlines()[0].strip()
+    if len(first_line) > 90:
+        first_line = first_line[:87] + "…"
+    return f"本次查询未完成：{first_line}。详细原因请点击右侧“查看详情”。"
+
+
 def _reference_for(property_data: dict[str, Any], source: str) -> dict[str, Any] | None:
     refs = property_data.get("external_references", {})
     item = refs.get(source) if isinstance(refs, dict) else None
@@ -253,9 +265,11 @@ st.session_state.results = [
 if "query_notice" not in st.session_state:
     st.session_state.query_notice = ""
 
+# 查询记录只保存在右侧详情面板；主页面不再重复渲染历史结果或错误详情。
 for entry in st.session_state.chat_history:
-    with st.chat_message(entry["role"]):
-        st.write(entry["content"])
+    if entry.get("role") == "user":
+        with st.chat_message("user"):
+            st.write(entry["content"])
 
 # 自然语言输入与提交居中；结果明细不再铺满主页面，统一收进右侧详情按钮。
 input_col, detail_col = st.columns([10, 1.3], vertical_alignment="bottom")
@@ -284,24 +298,27 @@ if submitted_prompt and prompt.strip():
             for result in query_results:
                 st.session_state.results.append({"prompt": prompt, "result": result})
             if all(item.get("status") == "ok" for item in query_results):
-                st.session_state.query_notice = "查询已完成。点击右侧“查看详情”查看物性表、来源对比和提醒。"
-                st.session_state.chat_history.append({"role": "assistant", "content": "查询已完成。可点击输入框右侧的“查看详情”查看结果。"})
+                st.session_state.query_notice = _compact_notice("", success=True)
+                st.session_state.chat_history.append({"role": "assistant", "content": "查询已完成。请点击右侧“查看详情”查看结果。"})
             else:
-                st.session_state.query_notice = str(response)
+                st.session_state.query_notice = _compact_notice(str(response))
                 st.session_state.chat_history.append({"role": "assistant", "content": str(response)})
         else:
             safe = _safe_clarification(response)
-            st.session_state.query_notice = safe
+            st.session_state.results.append({"prompt": prompt, "result": {"status": "needs_input", "message": safe}})
+            st.session_state.query_notice = _compact_notice(safe)
             st.session_state.chat_history.append({"role": "assistant", "content": safe})
     except LLMServiceError as exc:
         parsed, local_message = parse_explicit_query(prompt)
         if parsed is not None:
             local_result = query_properties(**parsed)
             st.session_state.results.append({"prompt": prompt, "result": local_result})
-            st.session_state.query_notice = "语言解析服务暂不可用，已使用本地规则处理；结果在右侧详情中。"
+            st.session_state.query_notice = "语言解析服务暂不可用，已使用本地规则处理。请点击右侧“查看详情”。"
             st.session_state.chat_history.append({"role": "assistant", "content": st.session_state.query_notice})
         else:
-            st.session_state.query_notice = "语言解析服务暂不可用。" + local_message
+            failure = "语言解析服务暂不可用。" + local_message
+            st.session_state.results.append({"prompt": prompt, "result": {"status": "needs_input", "message": failure}})
+            st.session_state.query_notice = _compact_notice(failure)
             st.session_state.chat_history.append({"role": "assistant", "content": st.session_state.query_notice})
     except Exception as exc:
         st.session_state.query_notice = f"本次查询未完成：{exc.__class__.__name__}: {exc}"
@@ -331,6 +348,7 @@ with detail_col:
         st.button("查看详情", disabled=True, use_container_width=True)
 
 if st.session_state.query_notice:
+    # 错误消息已经保存在对应的结果详情中，主页面只显示简短状态提示。
     st.info(st.session_state.query_notice)
 
 st.markdown("<div style='height:.7rem'></div>", unsafe_allow_html=True)
