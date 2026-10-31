@@ -4,6 +4,10 @@
 
 - `app.py`：Streamlit 对话界面和固定模型服务的受限工具调用循环。
 - `tools.py`：通用组分识别、输入校验、参数选择、物性计算、参考源查询和状态码处理。
+- `aspen_connector.py`：Windows Aspen COM 活动案例读取器，以及云端到本机桥接的客户端。
+- `aspen_bridge.py`：在 Aspen Windows 主机运行的只读 HTTP 桥接服务。
+- `simulation.py` / `simulation_ui.py`：流程模拟器输入校验、流股相态分流和查询页面。
+- `excel_export.py`：原始流股和 Agent 物性结果的双工作表 Excel 导出。
 - `requirements.txt`：运行依赖。
 - `.env.example`：部署主机的密钥变量模板；固定模型服务不可在网页修改。
 
@@ -66,15 +70,44 @@ streamlit run app.py
 
 `thermo` 物性计算不需要模型密钥；NIST 参考数据也不要求单独密钥，但查询时需要互联网连接。自然语言输入默认交给固定模型服务转换为工具参数（摄氏/华氏温度、压力单位和配比均转换为 K、Pa 和摩尔分数）；模型不可用时才尝试保守的本地解析。外部源不可达或超时会明确报告，不以模型值替代参考数据。
 
-ThermoML Search API 本身仅供检索元数据/摘要，不包含数值数据点；因此代码不能只依赖搜索 API 就声称已做数值比较。当前对搜索排序前 20 条候选进行元数据筛选，并按 DOI 读取候选完整 JSON；受官方覆盖范围（公开站点标注截至 2019 年）及检索排序影响，未命中时会明确标注“前 20 条候选未找到直接状态点”，不会静默跳过或插值/外推。泡点暂不从文献数据猜算；焓只有参考态明确一致才计算偏差；来源不确定度按 ThermoML 扩展不确定度显示。WebBook 和 ThermoML 各自单独成列，相对偏差按来源分别计算。
+ThermoML Search API 本身仅供检索元数据/摘要，不包含数值数据点；因此代码不能只依赖搜索 API 就声称已做数值比较。当前会扫描排序前 5 页（最多 100 条候选）并按 DOI 读取最多 12 篇相关完整 JSON；受官方覆盖范围（公开站点标注截至 2019 年）、文献实验组成/温度/压力离散点及检索排序影响，未命中时会明确说明“找到候选文献但没有当前状态点”，不会静默跳过或插值/外推。常压的 100 kPa、101.3 kPa 和 1 atm 允许小范围取整差；温度和摩尔分数仍要求直接实验点匹配。泡点暂不从文献数据猜算；焓只有参考态明确一致才计算偏差；来源不确定度按 ThermoML 扩展不确定度显示。WebBook 和 ThermoML 各自单独成列，相对偏差按来源分别计算。
 
 ## 重要工程边界
 
 - 输入温度范围为 273.15–450 K，压力范围为 1–100,000,000 Pa；范围外返回 `out_of_domain`。
-- 组分与摩尔分数按输入顺序传递；分数和在 1.0 的 `1e-6` 容差内校验，不自动归一化。
+- 组分与摩尔分数按输入顺序传递；输入值只需非负且总和大于 0，后端会自动按总和归一化。负数、全零、缺失或数量不匹配仍会拦截。
 - 本地规则解析是默认流程；无法识别的完整自然语言请求会交给固定语言模型辅助解析。界面不提供模型/接口选择；密钥由运行主机安全配置。界面仅将后端返回的数值作为物性结果展示。
 - `thermo` 给出的焓使用其默认基准，必须与下游模型对齐；相态枚举为 `single_liquid_assumed`，未做严格 LLE 稳定性校核。
 - 生产使用前应以目标组分、目标相态和目标压力范围进行回归验证，并记录 `thermo` 数据库/版本和文献参数出处。
+
+## Aspen Plus 连接
+
+侧栏入口名为“流程模拟调用”。真实 Aspen 读取代码不使用 Mock：在 Windows 上用 COM Running Object Table 枚举当前用户会话中已打开的 Aspen 文档，筛选 `.bkp`，并读取 Aspen Tree 中的运行状态、错误数、流股温度/压力/摩尔流量/摩尔分率和气相分率。Aspen COM 操作在独立 STA 线程执行，不会调用 `Run`、加载其他案例或修改流程文件。仅当 Aspen 已停止计算、错误数明确为 0 且流股树存在时，案例才可选。
+
+### 在 Aspen 主机本机运行
+
+1. Windows 安装并授权 Aspen Plus；由同一个 Windows 用户打开已运行成功的 `.bkp` 案例。
+2. 在该电脑安装 Python 3.12 和项目依赖：`pip install -r requirements.txt`。Windows 依赖会安装 `pywin32`。
+3. 从同一桌面用户会话运行 Streamlit 应用，打开“流程模拟调用”并点击“扫描正在运行的 Aspen 案例”。
+
+扫描时必须能从 Aspen 暴露 `Engine.IsRunning`、`\Data\Results Summary\Run-Status\Output\PER_ERROR` 和结果树。错误数节点路径可以用 `ASPEN_ERROR_COUNT_PATH` 覆盖；单位从 Aspen `\Unit Table` 解析，未知单位不会猜测转换，相关流股会标为不完整。
+
+### Render 网页访问 Aspen 主机
+
+Render 容器运行于 Linux，不能直接读取用户 Windows 桌面、COM ROT 或本地 `127.0.0.1`。为让 Render 网页访问 Aspen 主机，必须在 Aspen 电脑启动只读桥接服务，再使用 HTTPS 隧道将其转发到 Render。桥接接口只开放案例清单和流股读取，并要求至少 32 字符的 Bearer 令牌。
+
+在 Aspen Windows 主机 PowerShell 中设置同一桥接令牌并启动：
+
+```powershell
+$env:ASPEN_BRIDGE_TOKEN = "使用密码管理器生成的随机长令牌"
+python aspen_bridge.py
+```
+
+桥接服务默认只监听 `127.0.0.1:8765`。使用 Cloudflare Tunnel 或组织批准的 HTTPS 隧道将其映射为稳定 HTTPS 地址；不要直接把 8765 端口暴露到公网。在 Render 环境变量中私密设置 `ASPEN_BRIDGE_URL` 为该 HTTPS 地址，`ASPEN_BRIDGE_TOKEN` 填同一令牌。`render.yaml` 已声明这两个环境变量。桥接进程必须保持在 Aspen 登录用户的桌面会话中运行，Aspen 关闭或用户注销后查询将不可用。
+
+当前开发机没有 Aspen Plus、`Apwn.Document` 注册或真实 BKP，因此 COM 对象模型、状态路径和特定 Aspen 版本的流股节点尚不能在此机完成集成验证。代码采用严格失败关闭；真实安装后的第一轮部署仍需在目标 Aspen 版本上核验节点路径和单位表。自动化测试使用伪造的 COM 对象树验证转换和门控，不代表 Aspen 联调通过。
+
+测试：在项目 Python 环境中运行 `python -m unittest test_tools.py -v`。
 
 ## 调试与多人运行
 

@@ -10,6 +10,7 @@ import streamlit as st
 
 from llm_client import LLMServiceError, run_tool_loop
 from local_parser import parse_explicit_query, split_values
+from simulation_ui import render_simulation_page
 from tools import TARGET_PROPERTIES, query_properties
 
 
@@ -44,6 +45,42 @@ def _compact_notice(text: str, *, success: bool = False) -> str:
     if len(first_line) > 90:
         first_line = first_line[:87] + "…"
     return f"本次查询未完成：{first_line}。详细原因请点击右侧“查看详情”。"
+
+
+def _missing_parameter_warning(prompt: str, backend_message: str = "") -> str:
+    """把后端/模型的泛化缺参信息整理成用户可直接补填的清单。"""
+    _, local_message = parse_explicit_query(prompt)
+    if "请补充：" in local_message:
+        missing = local_message.split("请补充：", 1)[1].rstrip("。")
+        return f"无法开始查询，还缺少：{missing}。请补齐后重新提交。"
+
+    message = str(backend_message or "")
+    # 工具校验信息可能只指出一项；保留原意，同时把提示说清楚。
+    replacements = (
+        ("缺少摩尔分数", "摩尔分数/摩尔比"),
+        ("请提供至少一个非空组分名称", "组分名称"),
+        ("请指定至少一个目标物性", "目标物性"),
+        ("缺少温度", "温度（K）"),
+        ("缺少压力", "压力（Pa）或明确的‘常压’"),
+    )
+    for source, item in replacements:
+        if source in message:
+            return f"无法开始查询，还缺少：{item}。请补齐后重新提交。"
+    if message:
+        return f"无法开始查询：{message}。请补齐缺少参数后重新提交。"
+    return "无法开始查询，还缺少必要参数。请补充组分、摩尔分数、温度、压力和目标物性。"
+
+
+def _normalization_notice(result: dict[str, Any]) -> str:
+    """为已归一化的结果生成主页面上的简短检查提醒。"""
+    raw = result.get("input_mole_fractions")
+    normalized = result.get("mole_fractions")
+    if not isinstance(raw, list) or not isinstance(normalized, list) or not raw:
+        return ""
+    if abs(sum(float(value) for value in raw) - 1.0) <= 1e-6:
+        return ""
+    total = sum(float(value) for value in raw)
+    return f"组分组成总和为 {total:.6g}，已自动归一化后计算；请检查输入组成是否正确。"
 
 
 def _reference_for(property_data: dict[str, Any], source: str) -> dict[str, Any] | None:
@@ -110,7 +147,15 @@ def _coverage_label(nist_status: Any, thermoml_status: Any, pure_component: bool
         if isinstance(thermoml_status, dict) and thermoml_status.get("applicable") is False:
             thermoml_label = "暂不支持该物性的直接解析"
         else:
-            thermoml_label = f"{len(data)} 项" if data else "未命中状态点"
+            if data:
+                thermoml_label = f"{len(data)} 项"
+            elif isinstance(thermoml_status, dict) and thermoml_status.get("candidate_count"):
+                thermoml_label = (
+                    f"未命中状态点（候选 {thermoml_status.get('candidate_count')}，"
+                    f"已核验 {thermoml_status.get('documents_inspected', 0)} 篇）"
+                )
+            else:
+                thermoml_label = "未命中状态点"
     return f"参考源状态：NIST WebBook {nist_label} · ThermoML {thermoml_label}（详情可展开）"
 
 
@@ -248,19 +293,46 @@ def render_result(result: dict[str, Any]) -> None:
 st.set_page_config(page_title="物性数据查询", page_icon="⚗️", layout="centered")
 st.markdown("""
 <style>
-.block-container {max-width: 980px; padding-top: 2.2rem; padding-bottom: 3rem;}
-[data-testid="stAppViewContainer"] {background: linear-gradient(180deg, #f7f9fc 0%, #ffffff 280px);}
-[data-testid="stHeader"] {background: transparent;}
-.hero-title {text-align:center; font-size:2.05rem; font-weight:750; letter-spacing:.01em; margin:.6rem 0 .35rem; color:#172033;}
-.hero-caption {text-align:center; color:#667085; margin:0 auto 1.7rem; max-width:700px;}
-div[data-testid="stForm"] {border:1px solid #e4e8ef; border-radius:18px; padding:1rem; background:#fff; box-shadow:0 8px 28px rgba(20,35,60,.06);}
-div[data-testid="stPopover"] button {border-radius:12px;}
+/* 学术数据工作台：低饱和底色、窄边框和稳定的表格层级，避免营销式渐变。 */
+.block-container {max-width: 1080px; padding-top: 2rem; padding-bottom: 3rem;}
+[data-testid="stAppViewContainer"] {background:#eef2f5;}
+[data-testid="stHeader"] {background:transparent;}
+.hero-title {text-align:center; font-size:2rem; font-weight:700; letter-spacing:0; margin:.55rem 0 .3rem; color:#17324d;}
+.hero-caption {text-align:center; color:#536779; margin:0 auto 1.55rem; max-width:720px; font-size:.94rem;}
+div[data-testid="stForm"] {border:1px solid #cbd6df; border-radius:8px; padding:1rem; background:#ffffff; box-shadow:0 3px 12px rgba(22,48,72,.07);}
+div[data-testid="stPopover"] button {border-radius:7px; border:1px solid #b9c8d5; color:#17324d;}
+div[data-testid="stFormSubmitButton"] button, div[data-testid="stButton"] button[kind="primary"] {border-radius:7px; background:#176b78; border-color:#176b78;}
+[data-testid="stDataFrame"] {border:1px solid #cbd6df; border-radius:7px; background:#fff;}
+div[data-testid="stExpander"] {border:1px solid #cbd6df; border-radius:7px; background:#fff;}
+div[data-testid="stAlert"] {border-radius:7px;}
+div[data-testid="stButton"] > button, div[data-testid="stDownloadButton"] > button {
+  min-height:2.65rem; border:1px solid #b9c8d2; border-radius:5px;
+  background:#fbfcfd; color:#17324d; font-weight:600;
+  box-shadow:0 1px 2px rgba(20,45,64,.08); transition:background-color .15s ease,border-color .15s ease,box-shadow .15s ease;
+}
+div[data-testid="stButton"] > button:hover:not(:disabled), div[data-testid="stDownloadButton"] > button:hover:not(:disabled) {
+  border-color:#176b78; background:#edf5f5; color:#123f49; box-shadow:0 2px 5px rgba(20,45,64,.12);
+}
+div[data-testid="stButton"] > button:focus-visible, div[data-testid="stDownloadButton"] > button:focus-visible {
+  outline:3px solid rgba(23,107,120,.22); outline-offset:2px;
+}
+div[data-testid="stButton"] button[kind="primary"] {
+  color:#fff; background:#176b78; border-color:#176b78;
+}
+div[data-testid="stButton"] button[kind="primary"]:hover:not(:disabled) {
+  color:#fff; background:#125966; border-color:#125966;
+}
 @media (max-width: 640px) {
   .block-container {padding:1.1rem .8rem 2rem;}
   .hero-title {font-size:1.6rem;}
 }
 </style>
 """, unsafe_allow_html=True)
+selected_view = st.sidebar.radio("工作模块", ["物性数据查询", "流程模拟调用"])
+if selected_view == "流程模拟调用":
+    render_simulation_page()
+    st.stop()
+
 st.markdown('<div class="hero-title">⚗️ 物性数据查询</div>', unsafe_allow_html=True)
 st.markdown('<div class="hero-caption">描述组分、配比、温度和压力即可查询。系统会整理单位与参数，物性数值由后端计算。</div>', unsafe_allow_html=True)
 llm_config = _load_llm_config()
@@ -276,14 +348,12 @@ st.session_state.results = [
 ]
 if "query_notice" not in st.session_state:
     st.session_state.query_notice = ""
+if "input_warning" not in st.session_state:
+    st.session_state.input_warning = ""
 
-# 查询记录只保存在右侧详情面板；主页面不再重复渲染历史结果或错误详情。
-for entry in st.session_state.chat_history:
-    if entry.get("role") == "user":
-        with st.chat_message("user"):
-            st.write(entry["content"])
-
-# 自然语言输入与提交居中；结果明细不再铺满主页面，统一收进右侧详情按钮。
+# 查询记录只保存在会话状态和“查看详情”面板；主页面不渲染历史输入气泡。
+# 这样连续查询时不会把用户之前输入的一条条内容铺在页面上。
+# 自然语言输入与提交居中；结果明细统一收进右侧详情按钮。
 input_col, detail_col = st.columns([10, 1.3], vertical_alignment="bottom")
 with input_col:
     with st.form("natural_query_form", clear_on_submit=True, border=False):
@@ -299,6 +369,7 @@ with input_col:
 
 if submitted_prompt and prompt.strip():
     prompt = prompt.strip()
+    st.session_state.input_warning = ""
     st.session_state.chat_history.append({"role": "user", "content": prompt})
     try:
         history = [
@@ -313,11 +384,15 @@ if submitted_prompt and prompt.strip():
                 st.session_state.query_notice = _compact_notice("", success=True)
                 st.session_state.chat_history.append({"role": "assistant", "content": "查询已完成。请点击右侧“查看详情”查看结果。"})
             else:
-                st.session_state.query_notice = _compact_notice(str(response))
+                response_text = str(response)
+                if any(item.get("status") == "needs_input" for item in query_results):
+                    st.session_state.input_warning = _missing_parameter_warning(prompt, response_text)
+                st.session_state.query_notice = _compact_notice(response_text)
                 st.session_state.chat_history.append({"role": "assistant", "content": str(response)})
         else:
             safe = _safe_clarification(response)
             st.session_state.results.append({"prompt": prompt, "result": {"status": "needs_input", "message": safe}})
+            st.session_state.input_warning = _missing_parameter_warning(prompt, safe)
             st.session_state.query_notice = _compact_notice(safe)
             st.session_state.chat_history.append({"role": "assistant", "content": safe})
     except LLMServiceError as exc:
@@ -325,16 +400,29 @@ if submitted_prompt and prompt.strip():
         if parsed is not None:
             local_result = query_properties(**parsed)
             st.session_state.results.append({"prompt": prompt, "result": local_result})
+            if local_result.get("status") == "needs_input":
+                st.session_state.input_warning = _missing_parameter_warning(
+                    prompt, str(local_result.get("message", ""))
+                )
             st.session_state.query_notice = "语言解析服务暂不可用，已使用本地规则处理。请点击右侧“查看详情”。"
             st.session_state.chat_history.append({"role": "assistant", "content": st.session_state.query_notice})
         else:
             failure = "语言解析服务暂不可用。" + local_message
             st.session_state.results.append({"prompt": prompt, "result": {"status": "needs_input", "message": failure}})
+            st.session_state.input_warning = _missing_parameter_warning(prompt, failure)
             st.session_state.query_notice = _compact_notice(failure)
             st.session_state.chat_history.append({"role": "assistant", "content": st.session_state.query_notice})
     except Exception as exc:
+        st.session_state.input_warning = "查询暂未完成，请检查组分、摩尔分数、温度、压力和目标物性是否填写完整。"
         st.session_state.query_notice = f"本次查询未完成：{exc.__class__.__name__}: {exc}"
         st.session_state.chat_history.append({"role": "assistant", "content": st.session_state.query_notice})
+
+# 归一化不阻断计算，但在查询区下方明确提醒用户复核原始组成。
+if st.session_state.results:
+    latest_result = st.session_state.results[-1].get("result", {})
+    notice = _normalization_notice(latest_result) if isinstance(latest_result, dict) else ""
+    if notice:
+        st.warning(notice)
 
 with detail_col:
     natural_entries = [
@@ -350,7 +438,8 @@ with detail_col:
                     options=list(range(len(normalized_entries))),
                     index=len(normalized_entries) - 1,
                     format_func=lambda index: normalized_entries[index]["prompt"],
-                    key="natural_detail_selector",
+                    # 记录数变化时生成新 key，确保新查询自动选中最新一条。
+                    key=f"natural_detail_selector_{len(normalized_entries)}",
                 )
             else:
                 selected_index = 0
@@ -380,6 +469,9 @@ with structured_col:
         )
         submitted_structured = st.form_submit_button("查询物性", type="primary", use_container_width=True)
 
+if st.session_state.input_warning:
+    st.warning(st.session_state.input_warning)
+
 with structured_detail_col:
     structured_entries = [
         entry for entry in st.session_state.results
@@ -393,7 +485,7 @@ with structured_detail_col:
                     options=list(range(len(structured_entries))),
                     index=len(structured_entries) - 1,
                     format_func=lambda index: structured_entries[index]["prompt"],
-                    key="structured_detail_selector",
+                    key=f"structured_detail_selector_{len(structured_entries)}",
                 )
             else:
                 selected_structured_index = 0
@@ -406,10 +498,29 @@ if submitted_structured:
     try:
         component_names = split_values(component_text)
         fractions = [float(part) for part in split_values(fractions_text)]
+        structured_missing: list[str] = []
+        if not component_names:
+            structured_missing.append("组分名称")
+        if not fractions:
+            structured_missing.append("摩尔分数")
+        if not selected_properties:
+            structured_missing.append("目标物性")
+        if structured_missing:
+            st.session_state.input_warning = (
+                "无法开始查询，还缺少：" + "、".join(structured_missing) + "。请补齐后重新提交。"
+            )
+            st.rerun()
         structured_result = query_properties(component_names, fractions, temperature, pressure, selected_properties)
         st.session_state.results.append({"prompt": "结构化查询：" + "、".join(component_names), "result": structured_result})
+        if structured_result.get("status") == "needs_input":
+            st.session_state.input_warning = _missing_parameter_warning(
+                "、".join(component_names), str(structured_result.get("message", ""))
+            )
+        else:
+            st.session_state.input_warning = ""
         st.session_state.query_notice = ""
         st.rerun()
     except ValueError as exc:
-        st.session_state.query_notice = f"请检查组分或摩尔分数格式：{exc}"
+        st.session_state.input_warning = f"无法开始查询，摩尔分数格式有误：{exc}。请按组分顺序填写数字。"
+        st.session_state.query_notice = st.session_state.input_warning
         st.rerun()

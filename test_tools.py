@@ -3,9 +3,34 @@
 import unittest
 from unittest.mock import patch
 import json
+import io
+import zipfile
+import threading
+from http.server import ThreadingHTTPServer
+from types import SimpleNamespace
+from xml.etree import ElementTree as ET
 
+from aspen_connector import (
+    AspenConnectionError,
+    _case_id,
+    _read_selected_on_com_thread,
+    _read_streams,
+    _scan_on_com_thread,
+    _to_kelvin,
+    _to_kmol_h,
+    _to_pascal,
+)
+from aspen_bridge import _BridgeHandler
 from llm_client import LLMServiceError, run_tool_loop
 from local_parser import parse_explicit_query, split_values
+from excel_export import build_stream_workbook
+from simulation import (
+    INPUT_JSON_SCHEMA,
+    OUTPUT_JSON_SCHEMA,
+    SimulationInputError,
+    build_simulation_request,
+    enrich_streams,
+)
 from tools import (
     AMBIGUOUS_COMPONENT_CAS,
     Component,
@@ -25,8 +50,23 @@ class QueryValidationTests(unittest.TestCase):
         result = query_properties(["water"], None, 298.15, 101325, ["density"])
         self.assertEqual(result["status"], "needs_input")
 
-    def test_fraction_sum_is_not_silently_normalized(self):
+
+    @patch("tools._thermoml_lookup", return_value={"covered": False, "data": {}, "records": []})
+    def test_positive_fraction_sum_is_normalized(self, _thermoml_lookup):
         result = query_properties(["water", "ethanol"], [0.6, 0.3], 298.15, 101325, ["density"])
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["input_mole_fractions"], [0.6, 0.3])
+        self.assertAlmostEqual(sum(result["mole_fractions"]), 1.0)
+        self.assertAlmostEqual(result["mole_fractions"][0], 2 / 3)
+        self.assertAlmostEqual(result["mole_fractions"][1], 1 / 3)
+        self.assertTrue(any("归一化" in warning for warning in result["warnings"]))
+
+    def test_negative_fraction_is_rejected(self):
+        result = query_properties(["water", "ethanol"], [1.2, -0.2], 298.15, 101325, ["density"])
+        self.assertEqual(result["status"], "needs_input")
+
+    def test_all_zero_fractions_are_rejected(self):
+        result = query_properties(["water", "ethanol"], [0.0, 0.0], 298.15, 101325, ["density"])
         self.assertEqual(result["status"], "needs_input")
 
     def test_temperature_domain_is_enforced_before_solver(self):
@@ -39,11 +79,13 @@ class QueryValidationTests(unittest.TestCase):
         self.assertIn("气态", result["message"])
         self.assertEqual(result["phase_state"], "single_gas_detected")
 
-    def test_vapor_state_keeps_safe_partial_enthalpy_only(self):
+    def test_vapor_state_keeps_safe_gas_properties_and_excludes_liquid_only_properties(self):
         result = query_properties(["water"], [1.0], 400.0, 101325.0, ["density", "enthalpy"])
         self.assertEqual(result["status"], "out_of_domain")
         self.assertIn("enthalpy", result["partial_properties"])
-        self.assertNotIn("density", result["partial_properties"])
+        self.assertIn("density", result["partial_properties"])
+        self.assertEqual(result["partial_properties"]["density"]["phase"], "gas")
+        self.assertNotIn("surface_tension", result["partial_properties"])
 
     @patch.dict("os.environ", {"COMPONENT_ALIAS_FILE": "X:/missing/component_aliases.json"})
     def test_builtin_chinese_aliases_work_without_alias_json_file(self):
@@ -313,6 +355,8 @@ class ThermoMLIntegrationTests(unittest.TestCase):
         }
         exact = _thermoml_block_matches_state(block, body, mapping, [0.6, 0.4], 298.15, 101325.0)
         self.assertEqual(exact[0]["density"]["value"], 950.0)
+        rounded_atmosphere = _thermoml_block_matches_state(block, body, mapping, [0.6, 0.4], 298.15, 100000.0)
+        self.assertEqual(rounded_atmosphere[0]["density"]["value"], 950.0)
         wrong_fraction = _thermoml_block_matches_state(block, body, mapping, [0.4, 0.6], 298.15, 101325.0)
         self.assertEqual(wrong_fraction, [])
 
@@ -371,6 +415,17 @@ class LLMIntegrationTests(unittest.TestCase):
         results, reply = run_tool_loop("查一下水的物性参数", [], {"base_url": "local", "model": "test"})
         self.assertEqual(results, [])
         self.assertIn("温度和压力", reply)
+        chat.assert_not_called()
+
+    @patch("llm_client.chat_completion")
+    def test_ratio_is_recognized_but_missing_pressure_still_blocks_query(self, chat):
+        results, reply = run_tool_loop(
+            "查一下 300K 下，乙醇和水按 0.4:0.7 混合的密度",
+            [], {"base_url": "local", "model": "test"},
+        )
+        self.assertEqual(results, [])
+        self.assertIn("压力", reply)
+        self.assertNotIn("摩尔比", reply)
         chat.assert_not_called()
     def test_explicit_property_names_are_extracted_without_expanding_to_full_packet(self):
         from llm_client import _explicit_target_properties
@@ -467,6 +522,180 @@ class LLMIntegrationTests(unittest.TestCase):
         response.ok = True
         response.json.return_value = {"success": True, "data": {"models": [{"model_name": "relay-model"}]}}
         self.assertEqual(list_models({"base_url": "https://provider.example/v1", "api_key": "", "model": ""}), ["relay-model"])
+
+
+class SimulationContractTests(unittest.TestCase):
+    def _request(self, **updates):
+        payload = {
+            "components": ["water", "ethanol"],
+            "mole_fractions": [0.6, 0.4],
+            "flow_kmol_h": 100.0,
+            "T_K": 298.15,
+            "P_Pa": 101325.0,
+            "engine": "Aspen Plus",
+        }
+        payload.update(updates)
+        return build_simulation_request(**payload)
+
+    def test_composition_is_normalized_and_component_order_is_preserved(self):
+        request = self._request(mole_fractions=[6, 4])
+        self.assertEqual(request["feed"]["components"], ["water", "ethanol"])
+        self.assertEqual(request["feed"]["mole_fractions"], [0.6, 0.4])
+        self.assertTrue(request["validation"]["composition_normalized"])
+
+    def test_negative_or_zero_composition_is_rejected(self):
+        for fractions in ([-1, 2], [0, 0]):
+            with self.subTest(fractions=fractions), self.assertRaises(SimulationInputError):
+                self._request(mole_fractions=fractions)
+
+    def test_mismatched_component_and_fraction_counts_are_rejected(self):
+        with self.assertRaisesRegex(SimulationInputError, "数量"):
+            self._request(mole_fractions=[1.0])
+
+    def test_nonpositive_feed_flow_is_rejected(self):
+        with self.assertRaisesRegex(SimulationInputError, "进料摩尔流量"):
+            self._request(flow_kmol_h=0)
+
+    def test_schemas_define_explicit_engine_status_and_stream_output(self):
+        self.assertEqual(INPUT_JSON_SCHEMA["$schema"], "https://json-schema.org/draft/2020-12/schema")
+        self.assertIn("streams", OUTPUT_JSON_SCHEMA["required"])
+
+    def test_excel_export_is_a_valid_two_sheet_workbook_with_provenance_columns(self):
+        workbook_bytes = build_stream_workbook(
+            [{"stream_id": "S1", "stream_name": "进料", "phase": "liquid", "T_K": 298.15}],
+            [{"stream_id": "S1", "status": "ok", "density": 997.0, "density_source_ids": "thermo_Mixture_default_v1"}],
+        )
+        with zipfile.ZipFile(io.BytesIO(workbook_bytes)) as archive:
+            self.assertIn("xl/workbook.xml", archive.namelist())
+            workbook = ET.fromstring(archive.read("xl/workbook.xml"))
+            namespace = {"x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+            sheet_names = [sheet.attrib["name"] for sheet in workbook.findall("x:sheets/x:sheet", namespace)]
+            self.assertEqual(sheet_names, ["Aspen流股数据", "Agent物性数据"])
+            for path in ("xl/worksheets/sheet1.xml", "xl/worksheets/sheet2.xml", "xl/styles.xml"):
+                ET.fromstring(archive.read(path))
+
+    def test_aspen_unit_conversions_require_known_units(self):
+        self.assertAlmostEqual(_to_kelvin(25.0, "C"), 298.15)
+        self.assertAlmostEqual(_to_pascal(1.0, "bar"), 100000.0)
+        self.assertAlmostEqual(_to_kmol_h(1000.0, "mol/hr"), 1.0)
+        self.assertIsNone(_to_pascal(10.0, "unknown pressure unit"))
+
+    @patch("simulation.query_properties")
+    def test_enrichment_routes_single_phase_and_skips_two_phase(self, query):
+        query.side_effect = [
+            {"status": "ok", "phase_state": "single_liquid_assumed", "properties": {"density": {"value": 995, "unit": "kg/m3", "source_ids": ["thermo_liquid"]}}},
+            {"status": "out_of_domain", "phase_state": "single_gas_detected", "partial_properties": {"density": {"value": 1.2, "unit": "kg/m3", "phase": "gas", "source_ids": ["thermo_gas"]}}},
+        ]
+        streams = [
+            {"stream_id": "L", "stream_name": "Liquid", "phase": "liquid", "components": ["water"], "mole_fractions": [1.0], "flow_kmol_h": 1, "T_K": 298.15, "P_Pa": 101325, "read_status": "ok"},
+            {"stream_id": "G", "stream_name": "Vapor", "phase": "gas", "components": ["water"], "mole_fractions": [1.0], "flow_kmol_h": 1, "T_K": 400.0, "P_Pa": 101325, "read_status": "ok"},
+            {"stream_id": "2P", "stream_name": "Two phase", "phase": "two_phase", "components": ["water"], "mole_fractions": [1.0], "flow_kmol_h": 1, "T_K": 350.0, "P_Pa": 101325, "read_status": "ok"},
+        ]
+        source_rows, property_rows = enrich_streams(streams)
+        self.assertEqual(len(source_rows), 3)
+        self.assertEqual([row["status"] for row in property_rows], ["ok", "gas_partial", "two_phase_skipped"])
+        self.assertEqual(query.call_count, 2)
+        self.assertEqual(query.call_args_list[1].kwargs["include_references"], False)
+
+    def test_active_case_requires_explicit_zero_errors_and_stopped_engine(self):
+        class FakeCollection:
+            def __init__(self, items):
+                self.items = items
+                self.Count = len(items)
+
+            def Item(self, index):
+                if index < 0 or index >= len(self.items):
+                    raise IndexError(index)
+                return self.items[index]
+
+        class FakeNode:
+            def __init__(self, name="", value=None, elements=()):
+                self.Name = name
+                self.Value = value
+                self.Elements = FakeCollection(list(elements))
+                self.Units = ""
+
+        stream = FakeNode("S1")
+        error_node = FakeNode("PER_ERROR", 0)
+
+        class FakeTree:
+            def FindNode(self, path):
+                if path == r"\Data\Results Summary\Run-Status\Output\PER_ERROR":
+                    return error_node
+                if path == r"\Data\Streams":
+                    return FakeNode("Streams", elements=[stream])
+                if path == r"\Unit Table":
+                    return None
+                return None
+
+        document = SimpleNamespace(FullName=r"C:\Cases\case.bkp", Engine=SimpleNamespace(IsRunning=False), Tree=FakeTree())
+        case_record = ("!Apwn.Document.38.0", document.FullName, document)
+        with patch("aspen_connector._running_documents", return_value=[case_record]):
+            inventory = _scan_on_com_thread()
+        self.assertEqual(inventory["cases"][0]["run_status"], "converged")
+        self.assertTrue(inventory["cases"][0]["eligible"])
+
+        document.Engine.IsRunning = True
+        with patch("aspen_connector._running_documents", return_value=[case_record]):
+            with self.assertRaisesRegex(AspenConnectionError, "正在运行"):
+                _read_selected_on_com_thread(_case_id(case_record[0], case_record[1]))
+
+    def test_stream_values_are_converted_to_si_and_phase_is_classified(self):
+        class FakeCollection:
+            def __init__(self, items):
+                self.items = items
+                self.Count = len(items)
+
+            def Item(self, index):
+                return self.items[index]
+
+        class FakeNode:
+            def __init__(self, name="", value=None, units="", elements=()):
+                self.Name = name
+                self.Value = value
+                self.Units = units
+                self.Elements = FakeCollection(list(elements))
+
+            def FindNode(self, name):
+                return next((item for item in self.Elements.items if item.Name == name), None)
+
+        fractions = FakeNode("MIXED", elements=[FakeNode("water", 0.6), FakeNode("ethanol", 0.4)])
+        nodes = {
+            r"\Data\Streams": FakeNode("Streams", elements=[FakeNode("S1")]),
+            r"\Data\Streams\S1\Output\TEMP_OUT\MIXED": FakeNode("MIXED", 25.0, "C"),
+            r"\Data\Streams\S1\Output\PRES_OUT\MIXED": FakeNode("MIXED", 1.0, "bar"),
+            r"\Data\Streams\S1\Output\MOLEFLMX\MIXED": FakeNode("MIXED", 1.0, "mol/s"),
+            r"\Data\Streams\S1\Output\MOLEFRAC\MIXED": fractions,
+            r"\Data\Streams\S1\Output\VFRAC\MIXED": FakeNode("MIXED", 0.4),
+        }
+        tree = SimpleNamespace(FindNode=lambda path: nodes.get(path))
+        payload = _read_streams(SimpleNamespace(Tree=tree), "0123456789abcdefabcd")
+        stream = payload["streams"][0]
+        self.assertAlmostEqual(stream["T_K"], 298.15)
+        self.assertAlmostEqual(stream["P_Pa"], 100000.0)
+        self.assertAlmostEqual(stream["flow_kmol_h"], 3.6)
+        self.assertEqual(stream["components"], ["water", "ethanol"])
+        self.assertEqual(stream["phase"], "two_phase")
+
+    def test_local_bridge_requires_bearer_token_and_is_read_only(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _BridgeHandler)
+        server.bridge_token = "t" * 40
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            import requests
+
+            url = f"http://127.0.0.1:{server.server_port}/api/cases"
+            with patch("aspen_bridge.scan_open_cases", return_value={"status": "connected", "cases": []}):
+                denied = requests.get(url, timeout=2)
+                allowed = requests.get(url, headers={"Authorization": f"Bearer {server.bridge_token}"}, timeout=2)
+            self.assertEqual(denied.status_code, 401)
+            self.assertEqual(allowed.status_code, 200)
+            self.assertEqual(allowed.json()["status"], "connected")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
 
 if __name__ == "__main__":

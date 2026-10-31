@@ -818,8 +818,8 @@ def _thermoml_block_matches_state(
             continue
         if abs(point_t - T_K) > max(0.02, T_K * 1e-5):
             continue
-        # 文献通常将常压报告为 101 kPa，故允许 0.5% 的实验状态点取整差；不允许跨越条件做外推。
-        if abs(point_p - P_Pa) > max(1000.0, P_Pa * 0.005):
+        # 文献常把常压写成 100 kPa、101.3 kPa 或 1 atm；允许小范围状态点取整差，仍不做压力插值/外推。
+        if abs(point_p - P_Pa) > max(1500.0, P_Pa * 0.005):
             continue
         composition_ok = True
         seen_org_numbers: set[int] = set()
@@ -899,9 +899,13 @@ def _thermoml_lookup(payload: dict[str, Any], timeout_s: float = 8.0) -> dict[st
         total = 0
         component_map: dict[int, int] | None = None
         inspected = 0
-        # NIST 排序首批候选先验证；每次最多获取 10 个完整 JSON，避免宽查询拖慢对话。
-        for page in range(1):
+        pages_scanned = 0
+        max_documents = 12
+        # 排序前 5 页（最多 100 条候选）中筛选目标体系，再限制完整 JSON 下载数量。
+        # 只看第一页会被含其它溶质的三元体系占满，导致常见二元体系长期误报“未覆盖”。
+        for page in range(5):
             search = _thermoml_search_page(query, page, 20, timeout_s)
+            pages_scanned += 1
             total = int(search.get("size", 0) or 0)
             results = search.get("results", [])
             if not results:
@@ -924,6 +928,8 @@ def _thermoml_lookup(payload: dict[str, Any], timeout_s: float = 8.0) -> dict[st
                 # Require all requested compounds in the summary, then verify each data block below.
                 if len(set(matched_indices)) < len(components):
                     continue
+                if inspected >= max_documents:
+                    break
                 inspected += 1
                 try:
                     body = _thermoml_document(doi, timeout_s)
@@ -965,7 +971,8 @@ def _thermoml_lookup(payload: dict[str, Any], timeout_s: float = 8.0) -> dict[st
                     collected.append({"doi": doi, "title": title, "data": article_data})
                 if len(collected) >= 3:
                     break
-            break
+            if len(collected) >= 3 or inspected >= max_documents:
+                break
         data: dict[str, Any] = {}
         for record in collected:
             for prop, value in record["data"].items():
@@ -973,7 +980,7 @@ def _thermoml_lookup(payload: dict[str, Any], timeout_s: float = 8.0) -> dict[st
         if data:
             return {
                 "covered": True,
-                "message": f"NIST ThermoML Archive 检索到 {total} 条候选记录，检查排序前 {len(results)} 条后找到 {len(collected)} 篇在指定组成、温度和压力下有精确数据点的文献。",
+                "message": f"NIST ThermoML Archive 检索到 {total} 条候选记录，检查前 {pages_scanned * 20} 条候选后找到 {len(collected)} 篇在指定组成、温度和压力下有精确数据点的文献。",
                 "data": data,
                 "records": [{"doi": row["doi"], "title": row["title"], "url": f"{THERMOML_JSON_URL}/{quote(row['doi'], safe='/.-_()')}.json"} for row in collected],
                 "search_url": THERMOML_SEARCH_INFO_URL,
@@ -987,7 +994,7 @@ def _thermoml_lookup(payload: dict[str, Any], timeout_s: float = 8.0) -> dict[st
         elif inspected == 0:
             message = "NIST ThermoML Search API 有候选记录，但未找到完整匹配的组分组合。"
         else:
-            message = f"在检索排序前 {min(total, 20)} 条候选中找到相关 ThermoML 文献，但没有当前组成、温度、压力的直接数据点；未做插值或外推。" if inspected else "ThermoML 官方检索结果未发现可直接核验的组分组合。"
+            message = f"在检索前 {min(total, pages_scanned * 20)} 条候选中找到相关 ThermoML 文献，但没有当前组成、温度、压力的直接数据点；未做插值或外推。" if inspected else "ThermoML 官方检索结果未发现可直接核验的组分组合。"
         return {
             "covered": False, "message": message, "data": {}, "records": [],
             "search_url": THERMOML_SEARCH_INFO_URL, "archive_url": THERMOML_ARCHIVE_URL,
@@ -1008,6 +1015,8 @@ def query_properties(
     T_K: float,
     P_Pa: float,
     target_properties: list[str],
+    *,
+    include_references: bool = True,
 ) -> dict[str, Any]:
     """查询任意组分的物性；错误状态均显式返回，不使用经验兜底数值。"""
     if not isinstance(components, list) or not components or any(not isinstance(x, str) or not x.strip() for x in components):
@@ -1017,13 +1026,24 @@ def query_properties(
     if not isinstance(mole_fractions, list) or len(mole_fractions) != len(components):
         return _failure("needs_input", "组分数与摩尔分数个数必须一致，且顺序一一对应。")
     try:
-        xs = [_finite_number(x, f"mole_fractions[{i}]") for i, x in enumerate(mole_fractions)]
+        input_xs = [_finite_number(x, f"mole_fractions[{i}]") for i, x in enumerate(mole_fractions)]
         T = _finite_number(T_K, "T_K")
         P = _finite_number(P_Pa, "P_Pa")
     except ValueError as exc:
         return _failure("needs_input", str(exc))
-    if any(x < 0 or x > 1 for x in xs) or abs(sum(xs) - 1.0) > 1e-6:
-        return _failure("needs_input", "摩尔分数必须位于 [0,1]，且加和为 1.0（容差 1e-6）；系统不会自动归一化。")
+    if any(x < 0 for x in input_xs):
+        return _failure("needs_input", "摩尔分数/配比不能为负数；请检查各组分的输入值。")
+    fraction_total = sum(input_xs)
+    if fraction_total <= 0:
+        return _failure("needs_input", "摩尔分数/配比总和必须大于 0；不能全部填写为 0。")
+    normalization_applied = abs(fraction_total - 1.0) > 1e-6
+    # 允许输入 5:1、0.5:0.5 或任意正比例；交给 thermo 前统一归一化。
+    xs = [value / fraction_total for value in input_xs]
+    normalization_warning = (
+        f"已将输入摩尔分数/配比 [{', '.join(f'{value:g}' for value in input_xs)}] "
+        f"按总和 {fraction_total:g} 归一化为 [{', '.join(f'{value:.6g}' for value in xs)}]。"
+        if normalization_applied else ""
+    )
     if T < T_MIN_K or T > T_MAX_K or P < P_MIN_PA or P > P_MAX_PA:
         return _failure("out_of_domain", f"拒绝外推：安全温度范围为 {T_MIN_K:.2f}–{T_MAX_K:.2f} K，压力范围为 {P_MIN_PA:g}–{P_MAX_PA:g} Pa。")
     if not isinstance(target_properties, list) or not target_properties:
@@ -1052,6 +1072,22 @@ def query_properties(
         if gas_phase:
             requested = list(dict.fromkeys(target_properties))
             partial_properties: dict[str, Any] = {}
+            gas_calculators: dict[str, tuple[str, str, float]] = {
+                "density": ("气相密度", "rhog", 1.0),
+                "viscosity": ("气相动力粘度", "mug", 1e3),
+                "thermal_conductivity": ("气相热导率", "kg", 1.0),
+            }
+            for key, (label, attribute, multiplier) in gas_calculators.items():
+                if key in requested:
+                    try:
+                        partial_properties[key] = {
+                            **_number_from_mixture(mixture, label, attribute, multiplier),
+                            "unit": {"density": "kg/m3", "viscosity": "mPa·s", "thermal_conductivity": "W/(m·K)"}[key],
+                            "phase": "gas",
+                            "source_ids": ["thermo_Mixture_gas_default_v1"],
+                        }
+                    except (RuntimeError, TypeError, ValueError):
+                        pass
             if "enthalpy" in requested:
                 partial_properties["enthalpy"] = {
                     **_number_from_mixture(mixture, "气相摩尔焓", "Hm", 1e-3),
@@ -1074,10 +1110,11 @@ def query_properties(
                 "当前温度和压力下组分处于气态；未返回液相密度、液相粘度、表面张力或液相热导率。请降低温度或提高压力后重查。",
                 phase_state="single_gas_detected",
                 components=[{"name": c.input_name, "cas": c.cas} for c in resolved],
-                mole_fractions=xs, T_K=T, P_Pa=P,
+                mole_fractions=xs, input_mole_fractions=input_xs, T_K=T, P_Pa=P,
                 partial_properties=partial_properties,
                 unavailable_properties=unavailable,
-                warnings=["当前状态为气态；液相物性不适用。仅展示明确可计算的气相焓/泡点。"],
+                warnings=["当前状态为气态；已按气相相关式返回适用属性，不适用的液相表面张力不返回。"]
+                + ([normalization_warning] if normalization_warning else []),
             )
         if phase and phase not in {"l", "liquid"}:
             return _failure("solver_failed", "当前状态无法确认液相，未返回不可靠的液相数据。")
@@ -1089,9 +1126,11 @@ def query_properties(
                 phase_state="single_gas_or_vapor_detected",
                 components=[{"name": c.input_name, "cas": c.cas} for c in resolved],
                 mole_fractions=xs,
+                input_mole_fractions=input_xs,
                 T_K=T,
                 P_Pa=P,
                 bubble_point_K=bubble_temperature,
+                warnings=[normalization_warning] if normalization_warning else [],
             )
 
         # 只计算并返回用户勾选/请求的物性；泡点仍在内部计算，用于确认输入状态确实为液相。
@@ -1124,7 +1163,7 @@ def query_properties(
         elif model == "NRTL" and all(_pair_record(ledger, resolved[i].cas, resolved[j].cas, "UNIQUAC") for i in range(len(resolved)) for j in range(i + 1, len(resolved))):
             warnings.append("台账同时存在 UNIQUAC 参数；可用其进行交叉验证。")
 
-        nist = [_nist_lookup(resolved[0], T, P)] if len(resolved) == 1 else []
+        nist = [_nist_lookup(resolved[0], T, P)] if include_references and len(resolved) == 1 else []
         reference_request = {
             "components": [{"name": c.input_name, "canonical_name": c.canonical_name, "cas": c.cas} for c in resolved],
             "mole_fractions": xs,
@@ -1132,11 +1171,12 @@ def query_properties(
             "P_Pa": P,
             "target_properties": requested,
         }
-        thermoml = (
-            _thermoml_lookup(reference_request)
-            if len(resolved) > 1
-            else {"covered": False, "applicable": False, "message": "纯组分的参考数据由 NIST WebBook 提供。", "data": {}, "records": []}
-        )
+        if not include_references:
+            thermoml = {"covered": False, "applicable": False, "message": "本次批量处理未查询外部参考源。", "data": {}, "records": []}
+        elif len(resolved) > 1:
+            thermoml = _thermoml_lookup(reference_request)
+        else:
+            thermoml = {"covered": False, "applicable": False, "message": "纯组分的参考数据由 NIST WebBook 提供。", "data": {}, "records": []}
         if any(item.get("timeout") for item in nist) or thermoml.get("timeout"):
             return _failure("solver_failed", "外部参考数据库请求超时；本次查询按规则标记失败，未向界面发布部分结果。", references={"nist": nist, "thermoml": thermoml})
         source_references = {
@@ -1173,13 +1213,18 @@ def query_properties(
                 elif _unit_key(ref.get("unit")) != _unit_key(properties[prop]["unit"]):
                     comparison_warnings.append(f"{TARGET_PROPERTIES[prop]}参考值单位不匹配，已展示但不计算偏差。")
                 properties[prop].setdefault("reference", ref)
-        if not references:
+        if not references and include_references:
             warnings.append("外部参考源没有返回本状态点可直接比较的数值；参考栏标明未覆盖，不以模型值替代。")
+        elif not include_references:
+            warnings.append("本次为 Aspen 流股批量处理，仅运行本地 thermo 计算；未查询 NIST/ThermoML。")
         warnings.extend(comparison_warnings)
+        if normalization_warning:
+            warnings.append(normalization_warning)
         return {
             "status": "ok",
             "components": [{"name": c.input_name, "cas": c.cas} for c in resolved],
             "mole_fractions": xs,
+            "input_mole_fractions": input_xs,
             "T_K": T,
             "P_Pa": P,
             "properties": properties,
@@ -1204,7 +1249,7 @@ def query_properties_tool_schema() -> dict[str, Any]:
                 "type": "object",
                 "properties": {
                     "components": {"type": "array", "items": {"type": "string"}, "description": "组分名称列表，顺序由用户输入决定并严格保留。"},
-                    "mole_fractions": {"type": "array", "items": {"type": "number"}, "description": "与组分一一对应的摩尔分数，纯物质为 [1.0]。"},
+                    "mole_fractions": {"type": "array", "items": {"type": "number"}, "description": "与组分一一对应的非负摩尔分数或比例；总和不必为 1，后端会按总和自动归一化，纯物质可填 [1.0]。"},
                     "T_K": {"type": "number", "description": "温度，K。"},
                     "P_Pa": {"type": "number", "description": "压力，Pa。"},
                     "target_properties": {"type": "array", "items": {"type": "string", "enum": list(TARGET_PROPERTIES)}, "description": "目标物性。"},

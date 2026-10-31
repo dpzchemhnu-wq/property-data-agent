@@ -107,8 +107,10 @@ def parse_explicit_query(text: str) -> tuple[dict[str, Any] | None, str]:
     if not names:
         missing.append("组分名称（目前本地快捷解析识别别名表中的名称）")
 
+    # 既支持“摩尔比 0.4:0.7”，也支持“乙醇和水按 0.4:0.7 混合”。
+    # 比例本身有明确的 : / 分隔符，因此不会把温度、压力数值误识别为组成。
     ratio_match = re.search(
-        rf"(?:摩尔比|摩尔分数|组成|比例|mole\s*(?:ratio|fractions?))[^\d]{{0,16}}((?:{NUMBER}\s*[:：/]\s*)+{NUMBER})",
+        rf"((?:{NUMBER}\s*[:：/]\s*)+{NUMBER})",
         text,
         flags=re.IGNORECASE,
     )
