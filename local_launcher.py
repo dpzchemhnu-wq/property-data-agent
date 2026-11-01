@@ -25,10 +25,17 @@ PYTHON = VENV / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 
 def _ensure_python() -> None:
     if not PYTHON.exists():
-        base_python = shutil.which("py") if os.name == "nt" else shutil.which("python3")
+        if os.name == "nt":
+            launcher = shutil.which("py")
+            base_python = launcher or shutil.which("python")
+        else:
+            base_python = shutil.which("python3")
         if not base_python:
             raise SystemExit("未找到 Python。请先安装 Python 3.12，并勾选 Add Python to PATH。")
-        command = [base_python, "-3.12", "-m", "venv", str(VENV)] if os.name == "nt" else [base_python, "-m", "venv", str(VENV)]
+        if os.name == "nt" and Path(base_python).name.lower() == "py.exe":
+            command = [base_python, "-3.12", "-m", "venv", str(VENV)]
+        else:
+            command = [base_python, "-m", "venv", str(VENV)]
         subprocess.check_call(command, cwd=ROOT)
     subprocess.check_call([str(PYTHON), "-m", "pip", "install", "--upgrade", "pip"], cwd=ROOT)
     subprocess.check_call([str(PYTHON), "-m", "pip", "install", "-r", "requirements.txt"], cwd=ROOT)
