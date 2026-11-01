@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import time
+import webbrowser
 from pathlib import Path
 
 
@@ -48,13 +49,24 @@ def main() -> int:
     app_env["ASPEN_MCP_URL"] = "http://127.0.0.1:8765"
     print("本机 Aspen 自动连接模式已启动。")
     print("请在 Aspen Plus 中保持已成功运行的 BKP 打开，然后访问 http://127.0.0.1:8501")
+    app = subprocess.Popen(
+        [
+            str(PYTHON), "-m", "streamlit", "run", "app.py",
+            "--server.address", "127.0.0.1", "--server.port", "8501",
+            "--server.headless", "true", "--browser.gatherUsageStats", "false",
+        ],
+        cwd=ROOT,
+        env=app_env,
+    )
+    time.sleep(2.0)
+    if app.poll() is not None:
+        raise SystemExit("网页进程启动失败。请重新运行启动器并查看窗口中的错误信息。")
+    webbrowser.open("http://127.0.0.1:8501")
     try:
-        return subprocess.call(
-            [str(PYTHON), "-m", "streamlit", "run", "app.py", "--server.address", "127.0.0.1", "--server.port", "8501"],
-            cwd=ROOT,
-            env=app_env,
-        )
+        return app.wait()
     finally:
+        if app.poll() is None:
+            app.terminate()
         mcp.terminate()
         try:
             mcp.wait(timeout=8)
