@@ -1,6 +1,7 @@
 """物性后端的无网络边界测试，可用 python -m unittest 运行。"""
 
 import unittest
+import os
 from unittest.mock import patch
 import json
 import io
@@ -24,6 +25,7 @@ from aspen_bridge import _BridgeHandler
 from llm_client import LLMServiceError, run_tool_loop
 from local_parser import parse_explicit_query, split_values
 from excel_export import build_stream_workbook
+from demo_case import demo_payload
 from simulation import (
     INPUT_JSON_SCHEMA,
     OUTPUT_JSON_SCHEMA,
@@ -523,6 +525,24 @@ class LLMIntegrationTests(unittest.TestCase):
 
 
 class SimulationContractTests(unittest.TestCase):
+    def test_demo_case_completes_stream_to_excel_workflow(self):
+        from simulation import enrich_streams
+        payload = demo_payload()
+        source_rows, property_rows = enrich_streams(payload["streams"])
+        self.assertEqual(len(source_rows), 3)
+        self.assertEqual(len(property_rows), 3)
+        self.assertEqual(property_rows[0]["status"], "ok")
+        self.assertEqual(property_rows[2]["status"], "two_phase_skipped")
+        self.assertGreater(len(build_stream_workbook(source_rows, property_rows)), 1000)
+
+    @patch.dict("os.environ", {}, clear=True)
+    def test_uploaded_bkp_is_explicitly_blocked_on_non_windows(self):
+        from aspen_connector import AspenConnectionError, read_bkp_file
+        if os.name != "nt":
+            with self.assertRaises(AspenConnectionError) as context:
+                read_bkp_file("case.bkp", b"not-a-real-bkp")
+            self.assertIn("Windows", str(context.exception))
+
     def _request(self, **updates):
         payload = {
             "components": ["water", "ethanol"],
