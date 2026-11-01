@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import streamlit as st
 
 from aspen_connector import AspenConnectionError, read_streams, scan_cases
@@ -52,7 +54,20 @@ def render_simulation_page() -> None:
     if session_mcp_url and session_mcp_token:
         st.success("本机 Aspen 连接器已配对。此连接属于当前浏览器会话。")
     else:
-        st.info("未检测到本机 Aspen 连接。请在安装 Aspen 的电脑运行一键连接器，再通过它打开此线上网页。")
+        st.info("还没有连接本机 Aspen？下载下面的 Windows 连接器，在下载栏点击打开；它会自动完成准备、配对并重新打开此线上网页。")
+        connector_path = Path(__file__).with_name("Start Aspen Property Agent - One Click.bat")
+        if connector_path.is_file():
+            st.download_button(
+                "下载并连接本机 Aspen（Windows）",
+                data=connector_path.read_bytes(),
+                file_name=connector_path.name,
+                mime="application/octet-stream",
+                type="primary",
+                key="download_aspen_connector",
+                width="stretch",
+            )
+        with st.expander("为什么还需要打开下载的文件？", expanded=False):
+            st.write("浏览器不允许网页直接执行电脑上的 BAT 脚本。下载后请在浏览器下载栏点击该文件，并确认 Windows 的安全提示。之后连接器会自动打开已配对的线上页面；本窗口保持打开即可。")
 
     if st.button("扫描正在运行的 Aspen 案例", type="primary", key="scan_aspen_cases"):
         st.session_state.pop("aspen_case_result", None)

@@ -119,11 +119,11 @@ Aspen `.bkp` 是专有结果归档，网页不会尝试在云端猜测或解码�
 
 ### 线上网页 + 本机 Aspen 一键配对
 
-课程线上网页为 `https://property-data-agent-pvd5y6dm5iacitfwkhtsxe.streamlit.app/`。每位 Aspen 用户先打开已成功运行的 BKP，再双击 `Start Aspen Property Agent - One Click.bat`。BAT 自动下载当前项目、准备 Python 运行环境与 Cloudflare Tunnel，启动只读 Aspen MCP 服务，为本机创建临时 HTTPS 隧道，再打开线上网页并将这位用户的临时 MCP 地址/随机令牌绑定到当前 Streamlit 会话。网页进入“流程模拟调用”后点击扫描，即扫描该用户本机 Aspen；不同用户使用不同浏览器会话和隧道，可同时连接各自 Aspen。用户不需要填写 URL、令牌、配对码或 Render 环境变量。
+课程线上网页为 `https://property-data-agent-pvd5y6dm5iacitfwkhtsxe.streamlit.app/`。未配对时，网页显示“下载并连接本机 Aspen（Windows）”按钮，下载由 GitHub 部署版本提供的一键 BAT。用户在浏览器下载栏点击打开后，BAT 自动下载当前项目、准备 Python 运行环境与 Cloudflare Tunnel，启动只读 Aspen MCP 服务，为本机创建临时 HTTPS 隧道，再打开线上网页并将这位用户的临时 MCP 地址/随机令牌绑定到当前 Streamlit 会话。网页进入“流程模拟调用”后点击扫描，即扫描该用户本机 Aspen；不同用户使用不同浏览器会话和隧道，可同时连接各自 Aspen。用户不需要填写 URL、令牌、配对码或 Render 环境变量。
 
 首次使用需要联网下载项目、Python 依赖以及 Cloudflare Tunnel 程序，可能耗时数分钟；之后重复启动会复用本地文件。电脑必须已安装并授权 Aspen Plus。启动器窗口必须保持打开；关闭窗口会停止隧道与 MCP，本次线上连接随即失效。Quick Tunnel 地址每次启动都可能改变，因此每次都从 BAT 打开新的配对网页，不要复用旧标签。
 
-随机令牌只为本次启动生成，线上页面读取后会立即从地址栏移除。不要复制/分享启动器刚打开时的完整带参数地址；它在连接器运行期间相当于本机 Aspen 的临时只读访问凭证。MCP 仅开放枚举案例和读取流股两个只读工具，仍应只在可信设备上使用。
+浏览器出于安全隔离，不能由网页按钮直接执行 BAT；用户仍需确认打开下载文件一次。随机令牌只为本次启动生成，线上页面读取后会立即从地址栏移除。不要复制/分享启动器刚打开时的完整带参数地址；它在连接器运行期间相当于本机 Aspen 的临时只读访问凭证。MCP 仅开放枚举案例和读取流股两个只读工具，仍应只在可信设备上使用。
 
 当前开发机没有 Aspen Plus、`Apwn.Document` 注册或真实 BKP，因此 COM 对象模型、状态路径和特定 Aspen 版本的流股节点尚不能在此机完成集成验证。代码采用严格失败关闭；真实安装后的第一轮部署仍需在目标 Aspen 版本上核验节点路径和单位表。自动化测试使用伪造的 COM 对象树验证转换和门控，不代表 Aspen 联调通过。
 
