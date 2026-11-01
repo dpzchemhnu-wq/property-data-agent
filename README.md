@@ -117,6 +117,12 @@ Render 还需要一条从互联网到 Aspen 主机的 HTTPS 通道。临时演�
 
 Aspen `.bkp` 是专有结果归档，网页不会尝试在云端猜测或解码它。对方只拿到网址时，还需要在其安装 Aspen Plus 的 Windows 电脑上启动 `aspen_mcp_server.py`，通过 HTTPS 隧道把 MCP 服务发布给网页，并设置 `ASPEN_MCP_URL` 与 `ASPEN_MCP_TOKEN`。浏览器无法绕过 MCP 服务直接访问另一台电脑的 Windows COM。
 
+### 本机懒人模式（推荐测试方式）
+
+每位 Aspen 用户可以在自己的 Windows 电脑上双击 `Start Aspen Property Agent.bat`。脚本会自动创建 Python 虚拟环境、安装依赖、生成本次运行的本机令牌、启动 MCP 服务和网页；用户不需要填写地址、令牌或配对码。打开 Aspen Plus 并保持已成功运行的多个 BKP 后，浏览器访问 `http://127.0.0.1:8501`，点击“流程模拟调用”即可扫描并选择案例。关闭网页进程时本机 MCP 子进程也会停止。
+
+该模式是“每台电脑一个独立网页实例”，因此天然支持不同用户同时连接各自 Aspen，且流程数据不会经过公共云端。公共 Render 网页不能仅凭浏览器自动获得另一台电脑的 COM 权限；若必须共用一个网址，需要每台电脑运行本机代理并做用户级配对/隧道，不能通过前端代码绕过 Windows 安全边界。当前 Render 的 MCP 环境变量仍是单个服务级连接，适合绑定一台指定 Aspen 主机，不适合多用户同时绑定不同主机。
+
 当前开发机没有 Aspen Plus、`Apwn.Document` 注册或真实 BKP，因此 COM 对象模型、状态路径和特定 Aspen 版本的流股节点尚不能在此机完成集成验证。代码采用严格失败关闭；真实安装后的第一轮部署仍需在目标 Aspen 版本上核验节点路径和单位表。自动化测试使用伪造的 COM 对象树验证转换和门控，不代表 Aspen 联调通过。
 
 测试：在项目 Python 环境中运行 `python -m unittest test_tools.py -v`。
