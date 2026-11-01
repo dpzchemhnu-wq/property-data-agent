@@ -7,7 +7,6 @@ import json
 import io
 import zipfile
 import threading
-from http.server import ThreadingHTTPServer
 from types import SimpleNamespace
 from xml.etree import ElementTree as ET
 
@@ -21,7 +20,7 @@ from aspen_connector import (
     _to_kmol_h,
     _to_pascal,
 )
-from aspen_bridge import _BridgeHandler
+from aspen_mcp_server import dispatch
 from llm_client import LLMServiceError, run_tool_loop
 from local_parser import parse_explicit_query, split_values
 from excel_export import build_stream_workbook
@@ -524,6 +523,16 @@ class LLMIntegrationTests(unittest.TestCase):
 
 
 class SimulationContractTests(unittest.TestCase):
+    def test_aspen_mcp_exposes_typed_read_only_tools(self):
+        initialized = dispatch({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+        self.assertEqual(initialized["result"]["serverInfo"]["name"], "property-agent-aspen")
+        listed = dispatch({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
+        names = {tool["name"] for tool in listed["result"]["tools"]}
+        self.assertEqual(names, {"list_aspen_cases", "read_aspen_streams"})
+
+    def test_aspen_mcp_rejects_untyped_case_id_before_com(self):
+        response = dispatch({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "read_aspen_streams", "arguments": {"case_id": "not-valid"}}})
+        self.assertEqual(response["error"]["code"], -32602)
     def _request(self, **updates):
         payload = {
             "components": ["water", "ethanol"],
@@ -675,26 +684,6 @@ class SimulationContractTests(unittest.TestCase):
         self.assertAlmostEqual(stream["flow_kmol_h"], 3.6)
         self.assertEqual(stream["components"], ["water", "ethanol"])
         self.assertEqual(stream["phase"], "two_phase")
-
-    def test_local_bridge_requires_bearer_token_and_is_read_only(self):
-        server = ThreadingHTTPServer(("127.0.0.1", 0), _BridgeHandler)
-        server.bridge_token = "t" * 40
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        try:
-            import requests
-
-            url = f"http://127.0.0.1:{server.server_port}/api/cases"
-            with patch("aspen_bridge.scan_open_cases", return_value={"status": "connected", "cases": []}):
-                denied = requests.get(url, timeout=2)
-                allowed = requests.get(url, headers={"Authorization": f"Bearer {server.bridge_token}"}, timeout=2)
-            self.assertEqual(denied.status_code, 401)
-            self.assertEqual(allowed.status_code, 200)
-            self.assertEqual(allowed.json()["status"], "connected")
-        finally:
-            server.shutdown()
-            server.server_close()
-            thread.join(timeout=2)
 
 
 if __name__ == "__main__":

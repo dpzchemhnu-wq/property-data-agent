@@ -8,7 +8,7 @@ services:
       # 在托管平台控制台中私密填写；不要提交到代码仓库。
       - key: API_KEY
         sync: false
-      - key: ASPEN_BRIDGE_URL
+      - key: ASPEN_MCP_URL
         sync: false
-      - key: ASPEN_BRIDGE_TOKEN
+      - key: ASPEN_MCP_TOKEN
         sync: false

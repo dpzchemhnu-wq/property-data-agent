@@ -10,7 +10,6 @@ import queue
 import re
 import threading
 from typing import Any, Callable
-from urllib.parse import quote
 
 import requests
 
@@ -424,42 +423,48 @@ def read_case_streams(case_id: str) -> dict[str, Any]:
     return _sta_call(lambda: _read_selected_on_com_thread(case_id))
 
 
-def _bridge_request(path: str) -> dict[str, Any]:
-    base_url = os.getenv("ASPEN_BRIDGE_URL", "").strip().rstrip("/")
-    token = os.getenv("ASPEN_BRIDGE_TOKEN", "").strip()
+def _mcp_request(method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Call the typed Aspen MCP server and unwrap structuredContent."""
+    base_url = os.getenv("ASPEN_MCP_URL", "").strip().rstrip("/")
+    token = os.getenv("ASPEN_MCP_TOKEN", "").strip()
     if not base_url or not token:
-        raise AspenConnectionError("未配置 Aspen 本地桥接地址或桥接令牌。")
+        raise AspenConnectionError("未配置 Aspen MCP 地址或令牌。请让 Aspen Windows 主机启动 MCP 服务并配置 HTTPS 地址。")
     try:
-        response = requests.get(
-            base_url + path,
+        response = requests.post(
+            base_url + "/mcp",
             headers={"Authorization": f"Bearer {token}"},
-            timeout=(5, float(os.getenv("ASPEN_BRIDGE_TIMEOUT_SECONDS", "60"))),
+            json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}},
+            timeout=(5, float(os.getenv("ASPEN_MCP_TIMEOUT_SECONDS", "60"))),
         )
         response.raise_for_status()
-        result = response.json()
+        envelope = response.json()
     except requests.RequestException as exc:
-        raise AspenConnectionError(f"无法访问 Aspen 本地桥接服务：{exc.__class__.__name__}") from exc
+        raise AspenConnectionError(f"无法访问 Aspen MCP 服务：{exc.__class__.__name__}") from exc
+    if not isinstance(envelope, dict):
+        raise AspenConnectionError("Aspen MCP 返回了无效 JSON-RPC 响应。")
+    if envelope.get("error"):
+        error = envelope["error"]
+        raise AspenConnectionError(str(error.get("message", "Aspen MCP 工具调用失败。")) if isinstance(error, dict) else "Aspen MCP 工具调用失败。")
+    result = envelope.get("result", {})
+    if isinstance(result, dict) and isinstance(result.get("structuredContent"), dict):
+        result = result["structuredContent"]
     if not isinstance(result, dict):
-        raise AspenConnectionError("Aspen 本地桥接服务返回了无效响应。")
-    if result.get("status") == "error":
-        raise AspenConnectionError(str(result.get("message", "Aspen 桥接请求失败。")))
+        raise AspenConnectionError("Aspen MCP 工具返回了无效结构化结果。")
     return result
 
 
 def scan_cases() -> dict[str, Any]:
-    bridge_url = os.getenv("ASPEN_BRIDGE_URL", "").strip()
-    if bridge_url:
-        return _bridge_request("/api/cases")
+    if os.getenv("ASPEN_MCP_URL", "").strip():
+        return _mcp_request("tools/call", {"name": "list_aspen_cases", "arguments": {}})
     if os.name != "nt":
         raise AspenConnectionError(
-            "当前云端运行环境不是 Windows，不能直接访问你电脑上的 Aspen。请在 Aspen 主机启动 aspen_bridge.py，"
-            "通过 HTTPS 隧道发布桥接地址，并在 Render 设置 ASPEN_BRIDGE_URL 与 ASPEN_BRIDGE_TOKEN。"
+            "当前云端运行环境不是 Windows，不能直接访问你电脑上的 Aspen。请在 Aspen 主机启动 aspen_mcp_server.py，"
+            "通过 HTTPS 隧道发布 /mcp 地址，并在 Render 设置 ASPEN_MCP_URL 与 ASPEN_MCP_TOKEN。"
         )
     return scan_open_cases()
 
 
 def read_streams(case_id: str) -> dict[str, Any]:
-    bridge_url = os.getenv("ASPEN_BRIDGE_URL", "").strip()
-    if bridge_url:
-        return _bridge_request(f"/api/cases/{quote(case_id, safe='')}/streams")
+    if os.getenv("ASPEN_MCP_URL", "").strip():
+        return _mcp_request("tools/call", {"name": "read_aspen_streams", "arguments": {"case_id": case_id}})
     return read_case_streams(case_id)

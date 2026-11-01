@@ -5,7 +5,7 @@
 - `app.py`：Streamlit 对话界面和固定模型服务的受限工具调用循环。
 - `tools.py`：通用组分识别、输入校验、参数选择、物性计算、参考源查询和状态码处理。
 - `aspen_connector.py`：Windows Aspen COM 活动案例读取器，以及云端到本机桥接的客户端。
-- `aspen_bridge.py`：在 Aspen Windows 主机运行的只读 HTTP 桥接服务。
+- `aspen_mcp_server.py`：在 Aspen Windows 主机运行的 MCP 只读工具服务。
 - `simulation.py` / `simulation_ui.py`：流程模拟器输入校验、流股相态分流和查询页面。
 - `excel_export.py`：原始流股和 Agent 物性结果的双工作表 Excel 导出。
 - `requirements.txt`：运行依赖。
@@ -82,7 +82,7 @@ ThermoML Search API 本身仅供检索元数据/摘要，不包含数值数据�
 
 ## Aspen Plus 连接
 
-侧栏入口名为“流程模拟调用”。真实 Aspen 读取代码不使用 Mock：在 Windows 上用 COM Running Object Table 枚举当前用户会话中已打开的 Aspen 文档，筛选 `.bkp`，并读取 Aspen Tree 中的运行状态、错误数、流股温度/压力/摩尔流量/摩尔分率和气相分率。Aspen COM 操作在独立 STA 线程执行，不会调用 `Run`、加载其他案例或修改流程文件。仅当 Aspen 已停止计算、错误数明确为 0 且流股树存在时，案例才可选。
+侧栏入口名为“流程模拟调用”。真实 Aspen 读取采用论文所述的 MCP 模式：Windows 主机运行 `aspen_mcp_server.py`，只公开 `list_aspen_cases` 和 `read_aspen_streams` 两个强类型只读工具；工具内部再用 COM Running Object Table 枚举当前用户会话中已打开的 Aspen 文档，筛选 `.bkp`，并读取 Aspen Tree 中的运行状态、错误数、流股温度/压力/摩尔流量/摩尔分率和气相分率。模型和网页不能提交任意 COM 路径或代码。仅当 Aspen 已停止计算、错误数明确为 0 且流股树存在时，案例才可选。
 
 ### 在 Aspen 主机本机运行
 
@@ -96,18 +96,18 @@ ThermoML Search API 本身仅供检索元数据/摘要，不包含数值数据�
 
 Render 容器运行于 Linux，不能直接读取用户 Windows 桌面、COM ROT 或本地 `127.0.0.1`。为让 Render 网页访问 Aspen 主机，必须在 Aspen 电脑启动只读桥接服务，再使用 HTTPS 隧道将其转发到 Render。桥接接口只开放案例清单和流股读取，并要求至少 32 字符的 Bearer 令牌。
 
-在 Aspen Windows 主机 PowerShell 中设置同一桥接令牌并启动：
+在 Aspen Windows 主机 PowerShell 中设置同一 MCP 令牌并启动：
 
 ```powershell
-$env:ASPEN_BRIDGE_TOKEN = "使用密码管理器生成的随机长令牌"
-python aspen_bridge.py
+$env:ASPEN_MCP_TOKEN = "使用密码管理器生成的随机长令牌"
+python aspen_mcp_server.py
 ```
 
-桥接服务默认只监听 `127.0.0.1:8765`。使用 Cloudflare Tunnel 或组织批准的 HTTPS 隧道将其映射为稳定 HTTPS 地址；不要直接把 8765 端口暴露到公网。在 Render 环境变量中私密设置 `ASPEN_BRIDGE_URL` 为该 HTTPS 地址，`ASPEN_BRIDGE_TOKEN` 填同一令牌。`render.yaml` 已声明这两个环境变量。桥接进程必须保持在 Aspen 登录用户的桌面会话中运行，Aspen 关闭或用户注销后查询将不可用。
+MCP 服务默认只监听 `127.0.0.1:8765`。使用 Cloudflare Tunnel 或组织批准的 HTTPS 隧道将其映射为稳定 HTTPS 地址；不要直接把 8765 端口暴露到公网。在 Render 环境变量中私密设置 `ASPEN_MCP_URL` 为该 HTTPS 地址，`ASPEN_MCP_TOKEN` 填同一令牌。`render.yaml` 已声明这两个环境变量。MCP 进程必须保持在 Aspen 登录用户的桌面会话中运行，Aspen 关闭或用户注销后查询将不可用。
 
-仓库提供 `Start Aspen Bridge.ps1`：在 Aspen Windows 主机上运行会安装项目依赖（包括 Windows 的 `pywin32`）、生成本次运行的随机令牌并启动只读桥接。首次运行的令牌只显示在本机终端，需通过 Render 私密环境变量设置 `ASPEN_BRIDGE_TOKEN`。脚本默认只监听本机回环地址，不会自行暴露公网端口。
+仓库提供 `Start Aspen MCP.ps1`：在 Aspen Windows 主机上运行会安装项目依赖（包括 Windows 的 `pywin32`）、生成本次运行的随机令牌并启动 MCP 只读服务。首次运行的令牌只显示在本机终端，需通过 Render 私密环境变量设置 `ASPEN_MCP_TOKEN`。脚本默认只监听本机回环地址，不会自行暴露公网端口。
 
-Render 还需要一条从互联网到 Aspen 主机的 HTTPS 通道。临时演示可在 Aspen 主机另开 PowerShell 窗口运行 `cloudflared tunnel --url http://127.0.0.1:8765`，将其生成的 HTTPS 地址填入 Render 的 `ASPEN_BRIDGE_URL`。Quick Tunnel 的地址会在隧道重启后变化；长期演示应由项目所有者在 Cloudflare 配置具名 Tunnel/固定域名，或使用学校批准的 VPN/反向代理。不要将桥接改成 `0.0.0.0` 监听或直接开放 8765 入站端口。
+Render 还需要一条从互联网到 Aspen 主机的 HTTPS 通道。临时演示可在 Aspen 主机另开 PowerShell 窗口运行 `cloudflared tunnel --url http://127.0.0.1:8765`，将其生成的 HTTPS 地址填入 Render 的 `ASPEN_MCP_URL`。Quick Tunnel 的地址会在隧道重启后变化；长期演示应由项目所有者在 Cloudflare 配置具名 Tunnel/固定域名，或使用学校批准的 VPN/反向代理。不要将 MCP 改成 `0.0.0.0` 监听或直接开放 8765 入站端口。
 
 验证连接时先在 Aspen 主机浏览器访问 `http://127.0.0.1:8765/health`，应返回服务健康状态；再到网页点击“扫描正在运行的 Aspen 案例”。健康检查仅验证桥接进程，不代表 Aspen 案例可读。必须由同一个 Windows 用户会话打开 Aspen，且案例已停止计算、错误数为 0，才能读取。桥接本身不会启动、修改或保存 BKP 文件。
 
@@ -115,7 +115,7 @@ Render 还需要一条从互联网到 Aspen 主机的 HTTPS 通道。临时演�
 
 “流程模拟调用”页面只连接真实 Aspen Plus，不提供文件上传或模拟数据入口。点击“扫描正在运行的 Aspen 案例”后，页面枚举当前 Aspen 用户会话中的 BKP，只有已停止计算、错误数为 0 且存在结果流股的案例才可选择。读取后继续按流股相态调用 Agent 物性计算，并可下载流股与物性 Excel。
 
-Aspen `.bkp` 是专有结果归档，网页不会尝试在云端猜测或解码它。对方只拿到网址时，还需要在其安装 Aspen Plus 的 Windows 电脑上启动 `aspen_bridge.py`，通过 HTTPS 隧道把只读桥接服务发布给网页，并设置 `ASPEN_BRIDGE_URL` 与 `ASPEN_BRIDGE_TOKEN`。浏览器无法绕过桥接直接访问另一台电脑的 Windows COM。
+Aspen `.bkp` 是专有结果归档，网页不会尝试在云端猜测或解码它。对方只拿到网址时，还需要在其安装 Aspen Plus 的 Windows 电脑上启动 `aspen_mcp_server.py`，通过 HTTPS 隧道把 MCP 服务发布给网页，并设置 `ASPEN_MCP_URL` 与 `ASPEN_MCP_TOKEN`。浏览器无法绕过 MCP 服务直接访问另一台电脑的 Windows COM。
 
 当前开发机没有 Aspen Plus、`Apwn.Document` 注册或真实 BKP，因此 COM 对象模型、状态路径和特定 Aspen 版本的流股节点尚不能在此机完成集成验证。代码采用严格失败关闭；真实安装后的第一轮部署仍需在目标 Aspen 版本上核验节点路径和单位表。自动化测试使用伪造的 COM 对象树验证转换和门控，不代表 Aspen 联调通过。
 
