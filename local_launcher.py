@@ -31,6 +31,7 @@ def _ensure_python() -> None:
             base_python = launcher or shutil.which("python")
         else:
             base_python = shutil.which("python3")
+        base_python = base_python or sys.executable
         if not base_python:
             raise SystemExit("未找到 Python。请先安装 Python 3.12，并勾选 Add Python to PATH。")
         if os.name == "nt" and Path(base_python).name.lower() == "py.exe":

@@ -11,7 +11,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='
 if errorlevel 1 goto download_failed
 echo [2/4] 正在检查 Python...
 where py >nul 2>nul
-if not errorlevel 1 goto start_with_py
+if not errorlevel 1 (
+  py -3.12 -c "import sys" >nul 2>nul
+  if not errorlevel 1 goto start_with_py
+)
 where python >nul 2>nul
 if not errorlevel 1 goto start_with_python
 echo 未检测到 Python，尝试通过 Windows 包管理器安装 Python 3.12...
@@ -20,7 +23,11 @@ if errorlevel 1 goto python_missing
 winget install --id Python.Python.3.12 --exact --silent --accept-package-agreements --accept-source-agreements
 if errorlevel 1 goto python_missing
 where py >nul 2>nul
-if not errorlevel 1 goto start_with_py
+if not errorlevel 1 (
+  py -3.12 -c "import sys" >nul 2>nul
+  if not errorlevel 1 goto start_with_py
+)
+if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" goto start_with_direct_python
 goto python_missing
 :start_with_py
 echo [3/4] 正在启动本机 Aspen 网页...
@@ -29,6 +36,10 @@ goto finished
 :start_with_python
 echo [3/4] 正在启动本机 Aspen 网页...
 python "%INSTALL_ROOT%\local_launcher.py"
+goto finished
+:start_with_direct_python
+echo [3/4] 正在启动本机 Aspen 网页...
+"%LOCALAPPDATA%\Programs\Python\Python312\python.exe" "%INSTALL_ROOT%\local_launcher.py"
 goto finished
 :download_failed
 echo.
