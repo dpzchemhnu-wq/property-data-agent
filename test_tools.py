@@ -367,6 +367,23 @@ class ThermoMLIntegrationTests(unittest.TestCase):
 
 
 class ThermoIntegrationTests(unittest.TestCase):
+    def test_external_reference_selection_skips_unselected_sources(self):
+        with patch("tools._nist_lookup") as nist, patch("tools._thermoml_lookup") as thermoml, patch("tools._coolprop_lookup") as coolprop:
+            result = query_properties(["water"], [1.0], 298.15, 101325, ["density"], reference_sources=[])
+        self.assertEqual(result["status"], "ok")
+        nist.assert_not_called()
+        thermoml.assert_not_called()
+        coolprop.assert_not_called()
+        self.assertIn("未选择外部参考数据库", " ".join(result["warnings"]))
+
+    def test_selected_coolprop_is_a_pure_component_only_source(self):
+        fake = {"found": True, "data": {"density": {"value": 997.0, "unit": "kg/m3", "source_id": "coolprop:test"}}}
+        with patch("tools._coolprop_lookup", return_value=fake) as coolprop, patch("tools._nist_lookup", return_value={"found": False, "data": {}}):
+            result = query_properties(["water"], [1.0], 298.15, 101325, ["density"], reference_sources=["coolprop"])
+        self.assertEqual(result["status"], "ok")
+        coolprop.assert_called_once()
+        self.assertEqual(result["properties"]["density"]["external_references"]["coolprop"]["value"], 997.0)
+
     @patch("tools._thermoml_lookup", return_value={"covered": False, "message": "offline", "data": {}})
     @patch("tools._nist_lookup", return_value={"found": False, "message": "offline", "data": {}})
     def test_water_and_ethanol_preserve_order_and_return_only_requested_property(self, _nist, _thermoml):

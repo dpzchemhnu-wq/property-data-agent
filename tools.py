@@ -27,6 +27,11 @@ except ImportError:  # 允许界面启动并将缺失依赖作为明确错误返
     Chemical = None
     Mixture = None
 
+try:
+    from CoolProp.CoolProp import PropsSI as coolprop_props_si
+except ImportError:  # CoolProp 是可选的独立参考源，缺失时在结果中明确标明
+    coolprop_props_si = None
+
 
 TARGET_PROPERTIES = {
     "density": "液相密度",
@@ -530,6 +535,55 @@ def _nist_lookup(component: Component, T_K: float, P_Pa: float, timeout_s: float
         return {"found": False, "unavailable": True, "message": f"NIST WebBook 请求失败（{exc.__class__.__name__}）：{detail}；此次无法判断数据库是否覆盖该状态点。"}
 
 
+def _coolprop_lookup(component: Component, T_K: float, P_Pa: float) -> dict[str, Any]:
+    """CoolProp 仅作为纯流体独立参考源；不对混合物或不支持的流体猜测。"""
+    source_id = f"coolprop_pure_fluid:{component.cas}"
+    if coolprop_props_si is None:
+        return {"found": False, "unavailable": True, "message": "CoolProp 当前不可用；请重新安装项目依赖后重试。", "data": {}}
+    fluid_names = list(dict.fromkeys([component.canonical_name, component.cas]))
+    data: dict[str, Any] = {}
+    unit_specs = {
+        "density": ("Dmass", "kg/m3", 1.0),
+        "enthalpy": ("Hmolar", "kJ/mol", 1e-3),
+        "viscosity": ("VISCOSITY", "mPa·s", 1e3),
+        "thermal_conductivity": ("CONDUCTIVITY", "W/(m·K)", 1.0),
+    }
+    fluid_used = ""
+    for fluid in fluid_names:
+        try:
+            candidate: dict[str, Any] = {}
+            for key, (output, unit, multiplier) in unit_specs.items():
+                try:
+                    value = float(coolprop_props_si(output, "T", T_K, "P", P_Pa, fluid))
+                    if math.isfinite(value):
+                        candidate[key] = {"value": value * multiplier, "unit": unit, "source_id": source_id}
+                except Exception:
+                    continue
+            try:
+                bubble = float(coolprop_props_si("T", "P", P_Pa, "Q", 0, fluid))
+                if math.isfinite(bubble):
+                    candidate["bubble_point"] = {"value": bubble, "unit": "K", "source_id": source_id}
+            except Exception:
+                pass
+            if candidate:
+                data = candidate
+                fluid_used = fluid
+                break
+        except Exception:
+            continue
+    if not data:
+        return {"found": False, "message": "CoolProp 不覆盖该纯组分，或当前温压状态下没有可用的参考值。", "data": {}}
+    for item in data.values():
+        if "enthalpy" in data and item is data["enthalpy"]:
+            item["reference_state"] = "CoolProp 默认焓基准；未保证与 thermo 焓零点一致"
+    return {
+        "found": True,
+        "message": f"CoolProp 返回纯流体状态点参考值（流体标识：{fluid_used}）；仅对明确返回的物性进行比较。",
+        "source_id": source_id,
+        "data": data,
+    }
+
+
 THERMOML_SEARCH_URL = "https://trc.nist.gov/ThermoML-API/objects"
 THERMOML_JSON_URL = "https://trc.nist.gov/ThermoML"
 THERMOML_ARCHIVE_URL = "https://data.nist.gov/od/id/mds2-2422"
@@ -1017,6 +1071,7 @@ def query_properties(
     target_properties: list[str],
     *,
     include_references: bool = True,
+    reference_sources: list[str] | None = None,
 ) -> dict[str, Any]:
     """查询任意组分的物性；错误状态均显式返回，不使用经验兜底数值。"""
     if not isinstance(components, list) or not components or any(not isinstance(x, str) or not x.strip() for x in components):
@@ -1163,7 +1218,27 @@ def query_properties(
         elif model == "NRTL" and all(_pair_record(ledger, resolved[i].cas, resolved[j].cas, "UNIQUAC") for i in range(len(resolved)) for j in range(i + 1, len(resolved))):
             warnings.append("台账同时存在 UNIQUAC 参数；可用其进行交叉验证。")
 
-        nist = [_nist_lookup(resolved[0], T, P)] if include_references and len(resolved) == 1 else []
+        allowed_reference_sources = {"nist", "thermoml", "coolprop"}
+        if reference_sources is None:
+            selected_reference_sources = set(allowed_reference_sources)
+        elif not isinstance(reference_sources, list) or any(source not in allowed_reference_sources for source in reference_sources):
+            return _failure("needs_input", "参考数据库选择无效；可选 NIST WebBook 和 NIST ThermoML。")
+        else:
+            selected_reference_sources = set(reference_sources)
+        if not include_references:
+            selected_reference_sources.clear()
+        if len(resolved) == 1 and "nist" in selected_reference_sources:
+            nist = [_nist_lookup(resolved[0], T, P)]
+        elif len(resolved) == 1:
+            nist = [{"found": False, "applicable": False, "message": "本次未选择 NIST WebBook。", "data": {}}]
+        else:
+            nist = []
+        if len(resolved) == 1 and "coolprop" in selected_reference_sources:
+            coolprop = _coolprop_lookup(resolved[0], T, P)
+        elif len(resolved) == 1:
+            coolprop = {"found": False, "applicable": False, "message": "本次未选择 CoolProp。", "data": {}}
+        else:
+            coolprop = {"found": False, "applicable": False, "message": "CoolProp 参考接口仅覆盖纯流体，不适用于混合物。", "data": {}}
         reference_request = {
             "components": [{"name": c.input_name, "canonical_name": c.canonical_name, "cas": c.cas} for c in resolved],
             "mole_fractions": xs,
@@ -1171,8 +1246,8 @@ def query_properties(
             "P_Pa": P,
             "target_properties": requested,
         }
-        if not include_references:
-            thermoml = {"covered": False, "applicable": False, "message": "本次批量处理未查询外部参考源。", "data": {}, "records": []}
+        if "thermoml" not in selected_reference_sources:
+            thermoml = {"covered": False, "applicable": False, "message": "本次未选择 NIST ThermoML。", "data": {}, "records": []}
         elif len(resolved) > 1:
             thermoml = _thermoml_lookup(reference_request)
         else:
@@ -1182,6 +1257,7 @@ def query_properties(
         source_references = {
             "nist": {key: value for key, value in (nist[0].get("data", {}) if nist else {}).items() if key in requested},
             "thermoml": dict(thermoml.get("data", {})) if isinstance(thermoml.get("data", {}), dict) else {},
+            "coolprop": dict(coolprop.get("data", {})) if isinstance(coolprop.get("data", {}), dict) else {},
         }
         references = {prop: item for source in source_references.values() for prop, item in source.items()}
         comparison_warnings: list[str] = []
@@ -1213,10 +1289,12 @@ def query_properties(
                 elif _unit_key(ref.get("unit")) != _unit_key(properties[prop]["unit"]):
                     comparison_warnings.append(f"{TARGET_PROPERTIES[prop]}参考值单位不匹配，已展示但不计算偏差。")
                 properties[prop].setdefault("reference", ref)
-        if not references and include_references:
+        if not references and selected_reference_sources:
             warnings.append("外部参考源没有返回本状态点可直接比较的数值；参考栏标明未覆盖，不以模型值替代。")
         elif not include_references:
             warnings.append("本次为 Aspen 流股批量处理，仅运行本地 thermo 计算；未查询 NIST/ThermoML。")
+        elif not selected_reference_sources:
+            warnings.append("本次未选择外部参考数据库；仅展示 thermo 本地计算结果。")
         warnings.extend(comparison_warnings)
         if normalization_warning:
             warnings.append(normalization_warning)
@@ -1231,7 +1309,7 @@ def query_properties(
             "requested_properties": requested,
             "phase_state": "single_liquid_assumed",
             "thermo_model": thermo_source,
-            "references": {"nist": nist, "thermoml": thermoml},
+            "references": {"nist": nist, "thermoml": thermoml, "coolprop": coolprop},
             "warnings": warnings,
         }
     except Exception as exc:

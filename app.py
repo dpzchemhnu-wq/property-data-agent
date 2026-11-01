@@ -125,8 +125,9 @@ def _warning_summary(result: dict[str, Any]) -> tuple[list[str], list[str]]:
     if result.get("status") == "solver_failed":
         errors.append(str(result.get("message", "物性计算未成功。")))
     thermoml = result.get("references", {}).get("thermoml", {})
+    coolprop = result.get("references", {}).get("coolprop", {})
     nist_items = result.get("references", {}).get("nist", [])
-    for source in [*nist_items, thermoml]:
+    for source in [*nist_items, thermoml, coolprop]:
         message = source.get("message") if isinstance(source, dict) else None
         if isinstance(source, dict) and source.get("applicable") is False:
             continue
@@ -135,11 +136,13 @@ def _warning_summary(result: dict[str, Any]) -> tuple[list[str], list[str]]:
     return errors, list(dict.fromkeys(notices))
 
 
-def _coverage_label(nist_status: Any, thermoml_status: Any, pure_component: bool) -> str:
+def _coverage_label(nist_status: Any, thermoml_status: Any, pure_component: bool, coolprop_status: Any = None) -> str:
     if pure_component:
         entries = nist_status if isinstance(nist_status, list) else []
         count = sum(len(item.get("data", {})) for item in entries if isinstance(item, dict))
-        nist_label = f"{count} 项" if count else "未命中"
+        nist_label = f"{count} 项" if count else (
+            "未选择" if entries and all(item.get("applicable") is False for item in entries if isinstance(item, dict)) else "未命中"
+        )
         thermoml_label = "不适用"
     else:
         nist_label = "不适用"
@@ -156,7 +159,13 @@ def _coverage_label(nist_status: Any, thermoml_status: Any, pure_component: bool
                 )
             else:
                 thermoml_label = "未命中状态点"
-    return f"参考源状态：NIST WebBook {nist_label} · ThermoML {thermoml_label}（详情可展开）"
+    coolprop_label = "不适用" if not pure_component else (
+        f"{len(coolprop_status.get('data', {}))} 项"
+        if isinstance(coolprop_status, dict) and coolprop_status.get("data")
+        else "未选择" if isinstance(coolprop_status, dict) and coolprop_status.get("applicable") is False and "未选择" in coolprop_status.get("message", "")
+        else "未命中"
+    )
+    return f"参考源状态：NIST WebBook {nist_label} · ThermoML {thermoml_label} · CoolProp {coolprop_label}（详情可展开）"
 
 
 def render_result(result: dict[str, Any]) -> None:
@@ -196,10 +205,11 @@ def render_result(result: dict[str, Any]) -> None:
     )
     nist_status = result.get("references", {}).get("nist", [])
     thermoml_status = result.get("references", {}).get("thermoml", {})
+    coolprop_status = result.get("references", {}).get("coolprop", {})
     pure_component = len(result.get("components", [])) == 1
     model_rows: list[dict[str, str]] = []
-    source_rows: dict[str, list[dict[str, str]]] = {"nist": [], "thermoml": []}
-    source_labels = {"nist": "NIST WebBook", "thermoml": "NIST ThermoML"}
+    source_rows: dict[str, list[dict[str, str]]] = {"nist": [], "thermoml": [], "coolprop": []}
+    source_labels = {"nist": "NIST WebBook", "thermoml": "NIST ThermoML", "coolprop": "CoolProp"}
     requested_properties = result.get("requested_properties", list(result.get("properties", {})))
     for key in requested_properties:
         label = TARGET_PROPERTIES.get(key, key)
@@ -209,7 +219,7 @@ def render_result(result: dict[str, Any]) -> None:
         property_label = f"{label} ({item.get('unit', '')})"
         model_source = ", ".join(item.get("source_ids", [])) or "thermo"
         model_rows.append({"物性（单位）": property_label, "thermo 模型值": _bare_value(item.get("value")), "计算来源": model_source})
-        for source in ("nist", "thermoml"):
+        for source in ("nist", "thermoml", "coolprop"):
             reference = _reference_for(item, source)
             deviation = item.get("relative_deviation_pct_by_source", {}).get(source)
             within = item.get("within_reference_uncertainty_by_source", {}).get(source)
@@ -230,11 +240,11 @@ def render_result(result: dict[str, Any]) -> None:
         if nist_errors:
             st.caption("参考源状态：NIST WebBook 连接失败（此次无法判断是否覆盖）；ThermoML 不适用。")
         else:
-            st.caption(_coverage_label(nist_status, thermoml_status, pure_component))
+            st.caption(_coverage_label(nist_status, thermoml_status, pure_component, coolprop_status))
     else:
-        st.caption(_coverage_label(nist_status, thermoml_status, pure_component))
-    for source in ("nist", "thermoml"):
-        applicable = not (source == "nist" and not pure_component) and not (
+        st.caption(_coverage_label(nist_status, thermoml_status, pure_component, coolprop_status))
+    for source in ("nist", "thermoml", "coolprop"):
+        applicable = not (source in {"nist", "coolprop"} and not pure_component) and not (
             source == "thermoml" and pure_component
         )
         label = source_labels[source]
@@ -245,7 +255,13 @@ def render_result(result: dict[str, Any]) -> None:
                 if source_rows[source]:
                     st.dataframe(source_rows[source], width="stretch", hide_index=True)
                 else:
-                    st.caption("当前请求的物性没有可供比较的参考数据。")
+                    source_status = nist_status if source == "nist" else coolprop_status if source == "coolprop" else thermoml_status
+                    message = ""
+                    if source == "nist" and isinstance(source_status, list):
+                        message = "；".join(item.get("message", "") for item in source_status if isinstance(item, dict) and item.get("applicable") is False)
+                    elif isinstance(source_status, dict) and source_status.get("applicable") is False:
+                        message = str(source_status.get("message", ""))
+                    st.caption(message or "当前请求的物性没有可供比较的参考数据。")
                 if source == "thermoml" and isinstance(thermoml_status, dict):
                     for record in thermoml_status.get("records", []):
                         if isinstance(record, dict) and record.get("url"):
@@ -261,7 +277,7 @@ def render_result(result: dict[str, Any]) -> None:
             if notices:
                 st.info("\n\n".join(notices))
             source_rows = []
-            for source_name, source_value in (("NIST WebBook", nist_status), ("NIST ThermoML", thermoml_status)):
+            for source_name, source_value in (("NIST WebBook", nist_status), ("NIST ThermoML", thermoml_status), ("CoolProp", coolprop_status)):
                 if isinstance(source_value, list):
                     message = "；".join(entry.get("message", "") for entry in source_value if isinstance(entry, dict)) or "混合体系不适用纯组分查询接口。"
                     covered = any(entry.get("found", False) for entry in source_value if isinstance(entry, dict))
@@ -340,6 +356,25 @@ st.markdown('<div class="hero-title">⚗️ 物性数据查询</div>', unsafe_al
 st.markdown('<div class="hero-caption">描述组分、配比、温度和压力即可查询。系统会整理单位与参数，物性数值由后端计算。</div>', unsafe_allow_html=True)
 llm_config = _load_llm_config()
 
+with st.expander("选择外部参考数据库", expanded=False):
+    st.caption("thermo/chemicals 本地计算始终作为基准；以下仅控制是否查询外部实验参考值。未勾选的数据库不会发起请求。")
+    selected_reference_sources = st.multiselect(
+        "外部参考源",
+        options=["nist", "thermoml", "coolprop"],
+        default=["nist", "thermoml", "coolprop"],
+        format_func=lambda key: {
+            "nist": "NIST WebBook（纯组分）",
+            "thermoml": "NIST ThermoML（混合体系）",
+            "coolprop": "CoolProp（开源纯流体参考）",
+        }[key],
+        key="selected_reference_sources",
+    )
+    st.caption("PubChem 目前用于名称/CAS 识别，不作为工艺状态点物性数据源；DIPPR、DECHEMA 等需授权的数据未接入，不会以其名义返回数据。CoolProp 只对其覆盖的纯流体返回独立参考值，不覆盖混合物；与 thermo 的偏差只在同单位且参考态可比时计算。")
+
+def query_with_selected_sources(**kwargs: Any) -> dict[str, Any]:
+    """把用户选择的数据源约束注入工具；模型不能自行更改数据源。"""
+    return query_properties(**kwargs, reference_sources=list(selected_reference_sources))
+
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 if "results" not in st.session_state:
@@ -379,7 +414,9 @@ if submitted_prompt and prompt.strip():
             {"role": item["role"], "content": item["content"]}
             for item in st.session_state.chat_history[-8:]
         ][:-1]
-        query_results, response = run_tool_loop(prompt, history, llm_config)
+        query_results, response = run_tool_loop(
+            prompt, history, llm_config, property_query=query_with_selected_sources
+        )
         if query_results:
             for result in query_results:
                 st.session_state.results.append({"prompt": prompt, "result": result})
@@ -401,7 +438,7 @@ if submitted_prompt and prompt.strip():
     except LLMServiceError as exc:
         parsed, local_message = parse_explicit_query(prompt)
         if parsed is not None:
-            local_result = query_properties(**parsed)
+            local_result = query_with_selected_sources(**parsed)
             st.session_state.results.append({"prompt": prompt, "result": local_result})
             if local_result.get("status") == "needs_input":
                 st.session_state.input_warning = _missing_parameter_warning(
@@ -513,7 +550,10 @@ if submitted_structured:
                 "无法开始查询，还缺少：" + "、".join(structured_missing) + "。请补齐后重新提交。"
             )
             st.rerun()
-        structured_result = query_properties(component_names, fractions, temperature, pressure, selected_properties)
+        structured_result = query_properties(
+            component_names, fractions, temperature, pressure, selected_properties,
+            reference_sources=list(selected_reference_sources),
+        )
         st.session_state.results.append({"prompt": "结构化查询：" + "、".join(component_names), "result": structured_result})
         if structured_result.get("status") == "needs_input":
             st.session_state.input_warning = _missing_parameter_warning(

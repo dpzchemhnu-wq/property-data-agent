@@ -69,17 +69,24 @@ def render_simulation_page() -> None:
         with st.expander("为什么还需要打开下载的文件？", expanded=False):
             st.write("浏览器不允许网页直接执行电脑上的 BAT 脚本。下载后请在浏览器下载栏点击该文件，并确认 Windows 的安全提示。之后连接器会自动打开已配对的线上页面；本窗口保持打开即可。")
 
-    if st.button("扫描正在运行的 Aspen 案例", type="primary", key="scan_aspen_cases"):
+    if st.button(
+        "扫描正在运行的 Aspen 案例",
+        type="primary",
+        key="scan_aspen_cases",
+        disabled=not (session_mcp_url and session_mcp_token),
+        help="请先下载并运行本机 Aspen 连接器。" if not session_mcp_url else None,
+    ):
         st.session_state.pop("aspen_case_result", None)
         try:
             inventory = scan_cases(mcp_url=session_mcp_url or None, mcp_token=session_mcp_token or None)
             st.session_state.aspen_case_inventory = inventory
         except AspenConnectionError as exc:
             st.session_state.aspen_case_inventory = None
-            st.warning(str(exc))
-        except Exception as exc:
+            # 云端容器与用户电脑隔离；不要把内部运行环境/隧道细节当作用户操作错误显示。
+            st.warning("暂时无法连接本机 Aspen。请确认一键连接器窗口仍开启，然后重新下载并运行连接器。")
+        except Exception:
             st.session_state.aspen_case_inventory = None
-            st.warning(f"扫描 Aspen 案例失败：{type(exc).__name__}: {exc}")
+            st.warning("扫描未完成。请确认 Aspen Plus 已打开、连接器窗口仍开启，再重新尝试。")
 
     inventory = st.session_state.get("aspen_case_inventory")
     if not inventory:

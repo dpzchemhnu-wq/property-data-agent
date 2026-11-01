@@ -66,7 +66,7 @@ streamlit run app.py
 
 ## 外部参考数据边界
 
-纯组分通过 NIST WebBook Fluid CGI 查询给定温度/压力下的状态点。混合体系直接连接 NIST/TRC 官方 ThermoML：搜索端点 `https://trc.nist.gov/ThermoML-API/objects` 用于检索候选文献元数据；随后按 DOI 从 `https://trc.nist.gov/ThermoML/{DOI}.json` 读取实际实验数据点，并仅在组分和液相摩尔分数匹配、温度及压力位于明确的实验取整容差内时比较。该 JSON 路径与 NIST 官方站点提供的搜索说明及 DOI 对象链接一致。官方归档说明：完整数据集也可从 [NIST ThermoML Data Archive](https://data.nist.gov/od/id/mds2-2422) 下载约 189 MB 的 `.tgz`。当前集成采用按需下载单篇 JSON，避免每台安装都必须先拉取整个归档。
+纯组分可查询 NIST WebBook Fluid CGI 与 CoolProp，混合体系可查询 NIST/TRC 官方 ThermoML。页面可在查询前勾选外部参考源；`thermo/chemicals` 本地计算始终作为基准。CoolProp 是可选用的开源纯流体参考模型，不支持混合物，且只返回指定状态点实际可计算的字段。偏差仅在单位与参考态相容时计算。DIPPR、DECHEMA 和 Aspen Properties 属于许可/授权数据，本项目没有这些数据库的授权接口，因此不声称已接入，也不复制其受限数据。
 
 `thermo` 物性计算不需要模型密钥；NIST 参考数据也不要求单独密钥，但查询时需要互联网连接。自然语言输入默认交给固定模型服务转换为工具参数（摄氏/华氏温度、压力单位和配比均转换为 K、Pa 和摩尔分数）；模型不可用时才尝试保守的本地解析。外部源不可达或超时会明确报告，不以模型值替代参考数据。
 
@@ -82,50 +82,13 @@ ThermoML Search API 本身仅供检索元数据/摘要，不包含数值数据�
 
 ## Aspen Plus 连接
 
-侧栏入口名为“流程模拟调用”。真实 Aspen 读取采用论文所述的 MCP 模式：Windows 主机运行 `aspen_mcp_server.py`，只公开 `list_aspen_cases` 和 `read_aspen_streams` 两个强类型只读工具；工具内部再用 COM Running Object Table 枚举当前用户会话中已打开的 Aspen 文档，筛选 `.bkp`，并读取 Aspen Tree 中的运行状态、错误数、流股温度/压力/摩尔流量/摩尔分率和气相分率。模型和网页不能提交任意 COM 路径或代码。仅当 Aspen 已停止计算、错误数明确为 0 且流股树存在时，案例才可选。
+线上地址：<https://property-data-agent-pvd5y6dm5iacitfwkhtsxe.streamlit.app/>。打开“流程模拟调用”后，未连接状态只显示“下载并连接本机 Aspen（Windows）”按钮；未配对时扫描按钮不可用，不会再提示用户去配置 Render 地址或令牌。
 
-### 在 Aspen 主机本机运行
+用户在装有 Aspen Plus 的 Windows 电脑上打开线上页面，点击下载按钮，然后在浏览器下载栏自行确认并运行 BAT。连接器会自动准备本地运行环境和依赖，启动只读 Aspen 桥接与临时 HTTPS 通道，再打开带有当前会话配对信息的网页。连接器窗口必须保持开启。之后点击扫描，页面只允许选择已停止计算、错误数明确为 0 且存在结果流股的案例。读取完成后可按相态查询流股物性并导出 Excel。连接器不会启动、修改或保存 BKP 文件。
 
-1. Windows 安装并授权 Aspen Plus；由同一个 Windows 用户打开已运行成功的 `.bkp` 案例。
-2. 在该电脑安装 Python 3.12 和项目依赖：`pip install -r requirements.txt`。Windows 依赖会安装 `pywin32`。
-3. 从同一桌面用户会话运行 Streamlit 应用，打开“流程模拟调用”并点击“扫描正在运行的 Aspen 案例”。
+浏览器安全策略不允许网页直接执行 BAT，因此首次下载后仍需用户亲自确认运行；不能在网页中自动绕过这一安全提示。运行 BAT 前应确认文件来自本项目 GitHub 仓库；首次运行会从 GitHub 下载项目，并下载 Python 依赖和 Cloudflare Tunnel 程序。Windows 连接器会在用户本机运行 Aspen COM，云端网页不会直接访问 Windows COM。每位用户获得独立的临时隧道与会话令牌；关闭 BAT 窗口会断开本次连接。
 
-扫描时必须能从 Aspen 暴露 `Engine.IsRunning`、`\Data\Results Summary\Run-Status\Output\PER_ERROR` 和结果树。错误数节点路径可以用 `ASPEN_ERROR_COUNT_PATH` 覆盖；单位从 Aspen `\Unit Table` 解析，未知单位不会猜测转换，相关流股会标为不完整。
-
-### Render 网页访问 Aspen 主机
-
-Render 容器运行于 Linux，不能直接读取用户 Windows 桌面、COM ROT 或本地 `127.0.0.1`。为让 Render 网页访问 Aspen 主机，必须在 Aspen 电脑启动只读桥接服务，再使用 HTTPS 隧道将其转发到 Render。桥接接口只开放案例清单和流股读取，并要求至少 32 字符的 Bearer 令牌。
-
-在 Aspen Windows 主机 PowerShell 中设置同一 MCP 令牌并启动：
-
-```powershell
-$env:ASPEN_MCP_TOKEN = "使用密码管理器生成的随机长令牌"
-python aspen_mcp_server.py
-```
-
-MCP 服务默认只监听 `127.0.0.1:8765`。使用 Cloudflare Tunnel 或组织批准的 HTTPS 隧道将其映射为稳定 HTTPS 地址；不要直接把 8765 端口暴露到公网。在 Render 环境变量中私密设置 `ASPEN_MCP_URL` 为该 HTTPS 地址，`ASPEN_MCP_TOKEN` 填同一令牌。`render.yaml` 已声明这两个环境变量。MCP 进程必须保持在 Aspen 登录用户的桌面会话中运行，Aspen 关闭或用户注销后查询将不可用。
-
-仓库提供 `Start Aspen MCP.ps1`：在 Aspen Windows 主机上运行会安装项目依赖（包括 Windows 的 `pywin32`）、生成本次运行的随机令牌并启动 MCP 只读服务。首次运行的令牌只显示在本机终端，需通过 Render 私密环境变量设置 `ASPEN_MCP_TOKEN`。脚本默认只监听本机回环地址，不会自行暴露公网端口。
-
-Render 还需要一条从互联网到 Aspen 主机的 HTTPS 通道。临时演示可在 Aspen 主机另开 PowerShell 窗口运行 `cloudflared tunnel --url http://127.0.0.1:8765`，将其生成的 HTTPS 地址填入 Render 的 `ASPEN_MCP_URL`。Quick Tunnel 的地址会在隧道重启后变化；长期演示应由项目所有者在 Cloudflare 配置具名 Tunnel/固定域名，或使用学校批准的 VPN/反向代理。不要将 MCP 改成 `0.0.0.0` 监听或直接开放 8765 入站端口。
-
-验证连接时先在 Aspen 主机浏览器访问 `http://127.0.0.1:8765/health`，应返回服务健康状态；再到网页点击“扫描正在运行的 Aspen 案例”。健康检查仅验证桥接进程，不代表 Aspen 案例可读。必须由同一个 Windows 用户会话打开 Aspen，且案例已停止计算、错误数为 0，才能读取。桥接本身不会启动、修改或保存 BKP 文件。
-
-### Aspen 案例读取
-
-“流程模拟调用”页面只连接真实 Aspen Plus，不提供文件上传或模拟数据入口。点击“扫描正在运行的 Aspen 案例”后，页面枚举当前 Aspen 用户会话中的 BKP，只有已停止计算、错误数为 0 且存在结果流股的案例才可选择。读取后继续按流股相态调用 Agent 物性计算，并可下载流股与物性 Excel。
-
-Aspen `.bkp` 是专有结果归档，网页不会尝试在云端猜测或解码它。对方只拿到网址时，还需要在其安装 Aspen Plus 的 Windows 电脑上启动 `aspen_mcp_server.py`，通过 HTTPS 隧道把 MCP 服务发布给网页，并设置 `ASPEN_MCP_URL` 与 `ASPEN_MCP_TOKEN`。浏览器无法绕过 MCP 服务直接访问另一台电脑的 Windows COM。
-
-### 线上网页 + 本机 Aspen 一键配对
-
-课程线上网页为 `https://property-data-agent-pvd5y6dm5iacitfwkhtsxe.streamlit.app/`。未配对时，网页显示“下载并连接本机 Aspen（Windows）”按钮，下载由 GitHub 部署版本提供的一键 BAT。用户在浏览器下载栏点击打开后，BAT 自动下载当前项目、准备 Python 运行环境与 Cloudflare Tunnel，启动只读 Aspen MCP 服务，为本机创建临时 HTTPS 隧道，再打开线上网页并将这位用户的临时 MCP 地址/随机令牌绑定到当前 Streamlit 会话。网页进入“流程模拟调用”后点击扫描，即扫描该用户本机 Aspen；不同用户使用不同浏览器会话和隧道，可同时连接各自 Aspen。用户不需要填写 URL、令牌、配对码或 Render 环境变量。
-
-首次使用需要联网下载项目、Python 依赖以及 Cloudflare Tunnel 程序，可能耗时数分钟；之后重复启动会复用本地文件。电脑必须已安装并授权 Aspen Plus。启动器窗口必须保持打开；关闭窗口会停止隧道与 MCP，本次线上连接随即失效。Quick Tunnel 地址每次启动都可能改变，因此每次都从 BAT 打开新的配对网页，不要复用旧标签。
-
-浏览器出于安全隔离，不能由网页按钮直接执行 BAT；用户仍需确认打开下载文件一次。随机令牌只为本次启动生成，线上页面读取后会立即从地址栏移除。不要复制/分享启动器刚打开时的完整带参数地址；它在连接器运行期间相当于本机 Aspen 的临时只读访问凭证。MCP 仅开放枚举案例和读取流股两个只读工具，仍应只在可信设备上使用。
-
-当前开发机没有 Aspen Plus、`Apwn.Document` 注册或真实 BKP，因此 COM 对象模型、状态路径和特定 Aspen 版本的流股节点尚不能在此机完成集成验证。代码采用严格失败关闭；真实安装后的第一轮部署仍需在目标 Aspen 版本上核验节点路径和单位表。自动化测试使用伪造的 COM 对象树验证转换和门控，不代表 Aspen 联调通过。
+当前开发机没有 Aspen Plus，因此真实 Aspen COM 联调仍需在目标 Windows/Aspen 版本上验证。现有自动化测试验证的是 COM 接口门控、单位换算和数据读取逻辑，不等价于真实 Aspen 安装验证。若 Aspen 版本暴露的结果树路径不同，必须按真实 Aspen Tree 调整后再验收；未验证前不会把模拟案例冒充真实连接。
 
 测试：在项目 Python 环境中运行 `python -m unittest test_tools.py -v`。
 
