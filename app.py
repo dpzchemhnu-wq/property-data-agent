@@ -328,7 +328,11 @@ div[data-testid="stButton"] button[kind="primary"]:hover:not(:disabled) {
 }
 </style>
 """, unsafe_allow_html=True)
-selected_view = st.sidebar.radio("工作模块", ["物性数据查询", "流程模拟调用"])
+selected_view = st.sidebar.radio(
+    "工作模块",
+    ["物性数据查询", "流程模拟调用"],
+    index=1 if st.query_params.get("aspen_open") == "1" else 0,
+)
 if selected_view == "流程模拟调用":
     render_simulation_page()
     st.stop()

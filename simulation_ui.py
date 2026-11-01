@@ -29,10 +29,35 @@ def _render_result(result: dict) -> None:
 def render_simulation_page() -> None:
     st.markdown('<div class="hero-title">流程模拟调用</div>', unsafe_allow_html=True)
 
+    # 连接器只绑定当前 Streamlit 用户会话。链接中的一次性随机令牌
+    # 会立刻转存到 session_state 并从地址栏移除，避免多个用户共用 Render 环境变量。
+    query_url = str(st.query_params.get("aspen_mcp_url", "")).strip()
+    query_token = str(st.query_params.get("aspen_mcp_token", "")).strip()
+    if query_url and query_token:
+        if not query_url.startswith("https://") or not query_url.split("/", 3)[2].endswith(".trycloudflare.com"):
+            st.error("本机连接地址不符合安全规则，请使用最新的一键启动 BAT 重新连接。")
+            return
+        st.session_state.aspen_session_mcp_url = query_url.rstrip("/")
+        st.session_state.aspen_session_mcp_token = query_token
+        st.session_state.pop("aspen_case_inventory", None)
+        st.session_state.pop("aspen_case_result", None)
+        for key in ("aspen_mcp_url", "aspen_mcp_token"):
+            if key in st.query_params:
+                del st.query_params[key]
+        if "aspen_open" in st.query_params:
+            del st.query_params["aspen_open"]
+
+    session_mcp_url = str(st.session_state.get("aspen_session_mcp_url", "")).strip()
+    session_mcp_token = str(st.session_state.get("aspen_session_mcp_token", "")).strip()
+    if session_mcp_url and session_mcp_token:
+        st.success("本机 Aspen 连接器已配对。此连接属于当前浏览器会话。")
+    else:
+        st.info("未检测到本机 Aspen 连接。请在安装 Aspen 的电脑运行一键连接器，再通过它打开此线上网页。")
+
     if st.button("扫描正在运行的 Aspen 案例", type="primary", key="scan_aspen_cases"):
         st.session_state.pop("aspen_case_result", None)
         try:
-            inventory = scan_cases()
+            inventory = scan_cases(mcp_url=session_mcp_url or None, mcp_token=session_mcp_token or None)
             st.session_state.aspen_case_inventory = inventory
         except AspenConnectionError as exc:
             st.session_state.aspen_case_inventory = None
@@ -76,7 +101,11 @@ def render_simulation_page() -> None:
     )
     if st.button("读取流股并查询物性", key="read_aspen_streams"):
         try:
-            payload = read_streams(selection["case_id"])
+            payload = read_streams(
+                selection["case_id"],
+                mcp_url=session_mcp_url or None,
+                mcp_token=session_mcp_token or None,
+            )
             source_rows, property_rows = enrich_streams(payload.get("streams", []))
             st.session_state.aspen_case_result = {
                 "case_id": selection["case_id"],

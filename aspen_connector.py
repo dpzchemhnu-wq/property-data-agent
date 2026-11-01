@@ -10,6 +10,7 @@ import queue
 import re
 import threading
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 import requests
 
@@ -423,12 +424,23 @@ def read_case_streams(case_id: str) -> dict[str, Any]:
     return _sta_call(lambda: _read_selected_on_com_thread(case_id))
 
 
-def _mcp_request(method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+def _mcp_request(
+    method: str,
+    params: dict[str, Any] | None = None,
+    *,
+    mcp_url: str | None = None,
+    mcp_token: str | None = None,
+) -> dict[str, Any]:
     """Call the typed Aspen MCP server and unwrap structuredContent."""
-    base_url = os.getenv("ASPEN_MCP_URL", "").strip().rstrip("/")
-    token = os.getenv("ASPEN_MCP_TOKEN", "").strip()
+    base_url = (os.getenv("ASPEN_MCP_URL", "") if mcp_url is None else mcp_url).strip().rstrip("/")
+    token = (os.getenv("ASPEN_MCP_TOKEN", "") if mcp_token is None else mcp_token).strip()
     if not base_url or not token:
         raise AspenConnectionError("未配置 Aspen MCP 地址或令牌。请让 Aspen Windows 主机启动 MCP 服务并配置 HTTPS 地址。")
+    parsed_url = urlparse(base_url)
+    allowed_local = parsed_url.hostname in {"127.0.0.1", "localhost"} and parsed_url.scheme == "http"
+    allowed_tunnel = parsed_url.scheme == "https" and bool(parsed_url.hostname) and parsed_url.hostname.endswith(".trycloudflare.com")
+    if not (allowed_local or allowed_tunnel) or parsed_url.username or parsed_url.password:
+        raise AspenConnectionError("Aspen MCP 地址不符合安全规则；仅允许本机地址或 HTTPS Cloudflare 临时隧道。")
     try:
         response = requests.post(
             base_url + "/mcp",
@@ -453,9 +465,10 @@ def _mcp_request(method: str, params: dict[str, Any] | None = None) -> dict[str,
     return result
 
 
-def scan_cases() -> dict[str, Any]:
-    if os.getenv("ASPEN_MCP_URL", "").strip():
-        return _mcp_request("tools/call", {"name": "list_aspen_cases", "arguments": {}})
+def scan_cases(*, mcp_url: str | None = None, mcp_token: str | None = None) -> dict[str, Any]:
+    configured_url = (os.getenv("ASPEN_MCP_URL", "") if mcp_url is None else mcp_url).strip()
+    if configured_url:
+        return _mcp_request("tools/call", {"name": "list_aspen_cases", "arguments": {}}, mcp_url=configured_url, mcp_token=mcp_token)
     if os.name != "nt":
         raise AspenConnectionError(
             "当前云端运行环境不是 Windows，不能直接访问你电脑上的 Aspen。请在 Aspen 主机启动 aspen_mcp_server.py，"
@@ -464,7 +477,8 @@ def scan_cases() -> dict[str, Any]:
     return scan_open_cases()
 
 
-def read_streams(case_id: str) -> dict[str, Any]:
-    if os.getenv("ASPEN_MCP_URL", "").strip():
-        return _mcp_request("tools/call", {"name": "read_aspen_streams", "arguments": {"case_id": case_id}})
+def read_streams(case_id: str, *, mcp_url: str | None = None, mcp_token: str | None = None) -> dict[str, Any]:
+    configured_url = (os.getenv("ASPEN_MCP_URL", "") if mcp_url is None else mcp_url).strip()
+    if configured_url:
+        return _mcp_request("tools/call", {"name": "read_aspen_streams", "arguments": {"case_id": case_id}}, mcp_url=configured_url, mcp_token=mcp_token)
     return read_case_streams(case_id)

@@ -523,6 +523,20 @@ class LLMIntegrationTests(unittest.TestCase):
 
 
 class SimulationContractTests(unittest.TestCase):
+    @patch("aspen_connector.requests.post")
+    def test_session_specific_mcp_credentials_are_used_for_each_user(self, post):
+        from aspen_connector import _mcp_request
+        post.return_value.json.return_value = {"jsonrpc": "2.0", "id": 1, "result": {"structuredContent": {"status": "connected"}}}
+        result = _mcp_request("tools/call", {"name": "list_aspen_cases", "arguments": {}}, mcp_url="https://user-a.trycloudflare.com", mcp_token="a" * 44)
+        self.assertEqual(result["status"], "connected")
+        self.assertEqual(post.call_args.args[0], "https://user-a.trycloudflare.com/mcp")
+        self.assertEqual(post.call_args.kwargs["headers"]["Authorization"], "Bearer " + "a" * 44)
+
+    def test_session_mcp_url_rejects_arbitrary_hosts(self):
+        from aspen_connector import AspenConnectionError, _mcp_request
+        with self.assertRaisesRegex(AspenConnectionError, "安全规则"):
+            _mcp_request("tools/call", {}, mcp_url="http://169.254.169.254", mcp_token="b" * 44)
+
     def test_aspen_mcp_exposes_typed_read_only_tools(self):
         initialized = dispatch({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
         self.assertEqual(initialized["result"]["serverInfo"]["name"], "property-agent-aspen")

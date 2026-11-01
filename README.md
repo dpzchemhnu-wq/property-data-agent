@@ -117,13 +117,13 @@ Render 还需要一条从互联网到 Aspen 主机的 HTTPS 通道。临时演�
 
 Aspen `.bkp` 是专有结果归档，网页不会尝试在云端猜测或解码它。对方只拿到网址时，还需要在其安装 Aspen Plus 的 Windows 电脑上启动 `aspen_mcp_server.py`，通过 HTTPS 隧道把 MCP 服务发布给网页，并设置 `ASPEN_MCP_URL` 与 `ASPEN_MCP_TOKEN`。浏览器无法绕过 MCP 服务直接访问另一台电脑的 Windows COM。
 
-### 本机懒人模式（推荐测试方式）
+### 线上网页 + 本机 Aspen 一键配对
 
-每位 Aspen 用户可以在自己的 Windows 电脑上双击 `Start Aspen Property Agent.bat`。脚本会自动创建 Python 虚拟环境、安装依赖、生成本次运行的本机令牌、启动 MCP 服务和网页；用户不需要填写地址、令牌或配对码。打开 Aspen Plus 并保持已成功运行的多个 BKP 后，浏览器访问 `http://127.0.0.1:8501`，点击“流程模拟调用”即可扫描并选择案例。关闭网页进程时本机 MCP 子进程也会停止。
+课程线上网页为 `https://property-data-agent-pvd5y6dm5iacitfwkhtsxe.streamlit.app/`。每位 Aspen 用户先打开已成功运行的 BKP，再双击 `Start Aspen Property Agent - One Click.bat`。BAT 自动下载当前项目、准备 Python 运行环境与 Cloudflare Tunnel，启动只读 Aspen MCP 服务，为本机创建临时 HTTPS 隧道，再打开线上网页并将这位用户的临时 MCP 地址/随机令牌绑定到当前 Streamlit 会话。网页进入“流程模拟调用”后点击扫描，即扫描该用户本机 Aspen；不同用户使用不同浏览器会话和隧道，可同时连接各自 Aspen。用户不需要填写 URL、令牌、配对码或 Render 环境变量。
 
-若要只发送一个文件，可发送 `Start Aspen Property Agent - One Click.bat`。它会从 GitHub 下载当前项目到 `%LOCALAPPDATA%\PropertyDataAgent`，检查/尝试安装 Python 3.12，然后启动本机网页。对方不需要单独接收源代码文件，但电脑仍需已安装并授权 Aspen Plus，且需要网络访问 GitHub 和 Python 软件包源。首次启动可能需要几分钟，后续会复用本地文件和依赖。
+首次使用需要联网下载项目、Python 依赖以及 Cloudflare Tunnel 程序，可能耗时数分钟；之后重复启动会复用本地文件。电脑必须已安装并授权 Aspen Plus。启动器窗口必须保持打开；关闭窗口会停止隧道与 MCP，本次线上连接随即失效。Quick Tunnel 地址每次启动都可能改变，因此每次都从 BAT 打开新的配对网页，不要复用旧标签。
 
-该模式是“每台电脑一个独立网页实例”，因此天然支持不同用户同时连接各自 Aspen，且流程数据不会经过公共云端。公共 Render 网页不能仅凭浏览器自动获得另一台电脑的 COM 权限；若必须共用一个网址，需要每台电脑运行本机代理并做用户级配对/隧道，不能通过前端代码绕过 Windows 安全边界。当前 Render 的 MCP 环境变量仍是单个服务级连接，适合绑定一台指定 Aspen 主机，不适合多用户同时绑定不同主机。
+随机令牌只为本次启动生成，线上页面读取后会立即从地址栏移除。不要复制/分享启动器刚打开时的完整带参数地址；它在连接器运行期间相当于本机 Aspen 的临时只读访问凭证。MCP 仅开放枚举案例和读取流股两个只读工具，仍应只在可信设备上使用。
 
 当前开发机没有 Aspen Plus、`Apwn.Document` 注册或真实 BKP，因此 COM 对象模型、状态路径和特定 Aspen 版本的流股节点尚不能在此机完成集成验证。代码采用严格失败关闭；真实安装后的第一轮部署仍需在目标 Aspen 版本上核验节点路径和单位表。自动化测试使用伪造的 COM 对象树验证转换和门控，不代表 Aspen 联调通过。
 
