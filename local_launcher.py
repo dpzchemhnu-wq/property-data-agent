@@ -113,6 +113,7 @@ def main() -> int:
         raise SystemExit("Aspen MCP 启动失败。请检查 Aspen、pywin32 和端口 8765。")
     tunnel = None
     try:
+        print("连接器可以先与线上网页配对；是否安装 Aspen 会在点击扫描时单独检查。")
         print("正在为本机 Aspen 建立临时加密连接……")
         tunnel, public_mcp_url = _start_tunnel()
         query = urlencode({

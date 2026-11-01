@@ -156,7 +156,7 @@ def main() -> None:
     server = ThreadingHTTPServer((host, port), _MCPHandler)
     server.mcp_token = token
     print(f"Aspen MCP 服务已启动：{host}:{port}/mcp")
-    print("仅开放 list_aspen_cases/read_aspen_streams 两个只读工具；保持 Aspen 登录会话运行。")
+    print("仅开放 list_aspen_cases/read_aspen_streams 两个只读工具；要扫描案例，Aspen Plus 必须已安装并在当前 Windows 用户会话打开。")
     server.serve_forever()
 
 

@@ -679,6 +679,17 @@ class SimulationContractTests(unittest.TestCase):
             with self.assertRaisesRegex(AspenConnectionError, "正在运行"):
                 _read_selected_on_com_thread(_case_id(case_record[0], case_record[1]))
 
+    def test_scan_distinguishes_missing_aspen_from_no_open_cases(self):
+        with patch("aspen_connector._running_documents", return_value=[]), patch("aspen_connector._aspen_com_registered", return_value=False):
+            missing = _scan_on_com_thread()
+        self.assertEqual(missing["status"], "aspen_not_detected")
+        self.assertEqual(missing["cases"], [])
+
+        with patch("aspen_connector._running_documents", return_value=[]), patch("aspen_connector._aspen_com_registered", return_value=True):
+            no_cases = _scan_on_com_thread()
+        self.assertEqual(no_cases["status"], "no_active_cases")
+        self.assertEqual(no_cases["cases"], [])
+
     def test_stream_values_are_converted_to_si_and_phase_is_classified(self):
         class FakeCollection:
             def __init__(self, items):

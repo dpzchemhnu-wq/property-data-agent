@@ -164,6 +164,26 @@ def _running_documents() -> list[tuple[str, str, Any]]:
     return objects
 
 
+def _aspen_com_registered() -> bool:
+    """检查 Aspen COM ProgID 是否已注册；不创建 COM 对象，也不启动 Aspen。"""
+    if os.name != "nt":
+        return False
+    try:
+        import winreg
+    except ImportError:
+        return False
+    progids = ["Apwn.Document"] + [f"Apwn.Document.{version}" for version in ("39.0", "38.0", "37.0", "36.0", "35.0", "34.0", "33.0", "32.0", "31.0")]
+    views = [0, getattr(winreg, "KEY_WOW64_32KEY", 0), getattr(winreg, "KEY_WOW64_64KEY", 0)]
+    for view in set(views):
+        for progid in progids:
+            try:
+                with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, progid, 0, winreg.KEY_READ | view):
+                    return True
+            except OSError:
+                continue
+    return False
+
+
 def _unit_table(tree: Any) -> dict[tuple[int, int], str]:
     table: dict[tuple[int, int], str] = {}
     try:
@@ -362,7 +382,8 @@ def _read_streams(document: Any, case_id: str) -> dict[str, Any]:
 
 def _scan_on_com_thread() -> dict[str, Any]:
     cases = []
-    for moniker, path, document in _running_documents():
+    documents = _running_documents()
+    for moniker, path, document in documents:
         case_id = _case_id(moniker, path)
         error_count = _read_error_count(document.Tree)
         is_running = _engine_is_running(document)
@@ -381,7 +402,13 @@ def _scan_on_com_thread() -> dict[str, Any]:
             "eligible": eligible,
             "status_basis": "Aspen Engine.IsRunning=false, PER_ERROR=0, and stream tree present" if eligible else "Run status or error count could not be verified; case is not selectable",
         })
-    return {"status": "connected" if cases else "no_active_cases", "cases": cases}
+    if cases:
+        status = "connected"
+    elif _aspen_com_registered():
+        status = "no_active_cases"
+    else:
+        status = "aspen_not_detected"
+    return {"status": status, "cases": cases}
 
 
 def scan_open_cases() -> dict[str, Any]:

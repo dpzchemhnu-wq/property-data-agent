@@ -54,7 +54,7 @@ def render_simulation_page() -> None:
     if session_mcp_url and session_mcp_token:
         st.success("本机 Aspen 连接器已配对。此连接属于当前浏览器会话。")
     else:
-        st.info("还没有连接本机 Aspen？下载下面的 Windows 连接器，在下载栏点击打开；它会自动完成准备、配对并重新打开此线上网页。")
+        st.info("此网页尚未与本机连接器配对。若你刚运行过 BAT，请切换到连接器自动新开的网页；如果没有新网页，请查看 BAT 窗口是否仍在运行，再重新下载并打开连接器。")
         connector_path = Path(__file__).with_name("Start Aspen Property Agent - One Click.bat")
         if connector_path.is_file():
             st.download_button(
@@ -69,21 +69,19 @@ def render_simulation_page() -> None:
         with st.expander("为什么还需要打开下载的文件？", expanded=False):
             st.write("浏览器不允许网页直接执行电脑上的 BAT 脚本。下载后请在浏览器下载栏点击该文件，并确认 Windows 的安全提示。之后连接器会自动打开已配对的线上页面；本窗口保持打开即可。")
 
-    if st.button(
+    if session_mcp_url and session_mcp_token and st.button(
         "扫描正在运行的 Aspen 案例",
         type="primary",
         key="scan_aspen_cases",
-        disabled=not (session_mcp_url and session_mcp_token),
-        help="请先下载并运行本机 Aspen 连接器。" if not session_mcp_url else None,
     ):
         st.session_state.pop("aspen_case_result", None)
         try:
-            inventory = scan_cases(mcp_url=session_mcp_url or None, mcp_token=session_mcp_token or None)
+            inventory = scan_cases(mcp_url=session_mcp_url, mcp_token=session_mcp_token)
             st.session_state.aspen_case_inventory = inventory
-        except AspenConnectionError as exc:
+        except AspenConnectionError:
             st.session_state.aspen_case_inventory = None
             # 云端容器与用户电脑隔离；不要把内部运行环境/隧道细节当作用户操作错误显示。
-            st.warning("暂时无法连接本机 Aspen。请确认一键连接器窗口仍开启，然后重新下载并运行连接器。")
+            st.warning("暂时无法连接本机 Aspen。请确认一键连接器窗口仍开启，然后重新运行连接器。")
         except Exception:
             st.session_state.aspen_case_inventory = None
             st.warning("扫描未完成。请确认 Aspen Plus 已打开、连接器窗口仍开启，再重新尝试。")
@@ -93,6 +91,9 @@ def render_simulation_page() -> None:
         return
     cases = inventory.get("cases", [])
     if not cases:
+        if inventory.get("status") == "aspen_not_detected":
+            st.warning("本机连接器已连接，但未检测到 Aspen Plus。当前电脑未安装 Aspen，或 Aspen 的 COM 接口未注册；请在安装并授权 Aspen Plus 的 Windows 电脑上运行此连接器。")
+            return
         st.info("未发现当前用户会话中打开的 Aspen BKP 案例。请先在 Aspen Plus 中打开并运行案例，再重新扫描。")
         return
 
