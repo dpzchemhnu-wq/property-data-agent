@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.request
 import webbrowser
 from pathlib import Path
 
@@ -34,6 +35,14 @@ def _ensure_python() -> None:
 
 
 def main() -> int:
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:8501/_stcore/health", timeout=1) as response:
+            if response.status == 200:
+                webbrowser.open("http://127.0.0.1:8501")
+                print("网页已经在运行，已打开现有页面。")
+                return 0
+    except Exception:
+        pass
     _ensure_python()
     env = os.environ.copy()
     env["ASPEN_MCP_HOST"] = "127.0.0.1"
