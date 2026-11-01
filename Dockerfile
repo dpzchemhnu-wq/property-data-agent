@@ -8,7 +8,7 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN python -m pip install --no-cache-dir -r requirements.txt
 
-COPY app.py tools.py llm_client.py local_parser.py component_aliases.json simulation.py simulation_ui.py aspen_connector.py aspen_bridge.py excel_export.py demo_case.py ./
+COPY app.py tools.py llm_client.py local_parser.py component_aliases.json simulation.py simulation_ui.py aspen_connector.py aspen_bridge.py excel_export.py demo_case.py stream_import.py demo_streams.json ./
 EXPOSE 8501
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \

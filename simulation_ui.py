@@ -8,6 +8,7 @@ from aspen_connector import AspenConnectionError, read_bkp_file, read_streams, s
 from demo_case import demo_payload
 from excel_export import build_stream_workbook
 from simulation import enrich_streams
+from stream_import import StreamImportError, parse_stream_file
 
 
 def _render_result(result: dict) -> None:
@@ -38,6 +39,7 @@ def render_simulation_page() -> None:
         demo_clicked = st.button("加载课堂演示案例", key="load_demo_case")
     with upload_col:
         uploaded = st.file_uploader("上传已成功运行的 Aspen BKP", type=["bkp"], key="aspen_bkp_upload")
+    imported_file = st.file_uploader("无需 Aspen：上传流股 CSV/JSON", type=["csv", "json"], key="stream_export_upload")
     if demo_clicked:
         payload = demo_payload()
         source_rows, property_rows = enrich_streams(payload["streams"])
@@ -61,8 +63,19 @@ def render_simulation_page() -> None:
         except Exception as exc:
             st.session_state.aspen_case_result = None
             st.warning(f"BKP 分析失败：{type(exc).__name__}: {exc}")
+    if imported_file is not None and st.button("分析通用流股文件", key="analyze_stream_file"):
+        try:
+            payload = parse_stream_file(imported_file.name, imported_file.getvalue())
+            source_rows, property_rows = enrich_streams(payload["streams"])
+            st.session_state.aspen_case_result = {"case_id": payload["case_id"], "file_name": imported_file.name, "source_rows": source_rows, "property_rows": property_rows, "demo": False, "imported": True}
+        except StreamImportError as exc:
+            st.session_state.aspen_case_result = None
+            st.warning(str(exc))
+        except Exception as exc:
+            st.session_state.aspen_case_result = None
+            st.warning(f"通用流股文件分析失败：{type(exc).__name__}: {exc}")
     immediate_result = st.session_state.get("aspen_case_result")
-    if immediate_result and (immediate_result.get("demo") or uploaded is not None):
+    if immediate_result and (immediate_result.get("demo") or immediate_result.get("imported") or uploaded is not None):
         _render_result(immediate_result)
         return
     st.divider()

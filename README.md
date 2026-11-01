@@ -115,6 +115,10 @@ Render 还需要一条从互联网到 Aspen 主机的 HTTPS 通道。临时演�
 
 “流程模拟调用”页面提供“加载课堂演示案例”。它使用仓库内明确标注的教学流股，演示流股温度、压力、组成读取、Agent 物性计算和 Excel 下载，不把示例数据伪装成 Aspen 结果。页面还提供 `.bkp` 上传入口。上传的 BKP 只有在运行网页的 Windows 主机安装了相应 Aspen Plus、注册了 COM 且该 BKP 可由当前 Aspen 版本打开时才能读取；Windows 页面会通过 `InitFromArchive2`/`InitFromArchive` 加载并只读结果树，要求错误数为 0，不会自动运行或修改文件。Render 的 Linux 容器不能解析 BKP，上传时会明确提示应改用 Aspen Windows 主机或桥接已打开的案例。
 
+如果电脑没有 Aspen Plus，可以在 Aspen、DWSIM 或其他流程软件中将流股导出为 CSV/JSON，再在“流程模拟调用”页面选择“无需 Aspen：上传流股 CSV/JSON”。至少提供 `stream_id`、`phase`、`flow_kmol_h`、`T_K`、`P_Pa`、`components`、`mole_fractions`；也支持 `T_C`、`P_kPa`。网页会校验并归一化组成，调用 Agent 计算物性并生成相同的 Excel。仓库中的 `demo_streams.json` 可直接用于演示。
+
+GitHub 上目前没有发现能够在 Linux 云端可靠解码 Aspen 专有 `.bkp` 结果树的通用开源解析器；相关项目主要依赖 Aspen COM 或特定版本脚本。因此 `.bkp` 仍需要 Aspen Windows COM，CSV/JSON 是无需安装 Aspen 的实际替代路径。
+
 当前开发机没有 Aspen Plus、`Apwn.Document` 注册或真实 BKP，因此 COM 对象模型、状态路径和特定 Aspen 版本的流股节点尚不能在此机完成集成验证。代码采用严格失败关闭；真实安装后的第一轮部署仍需在目标 Aspen 版本上核验节点路径和单位表。自动化测试使用伪造的 COM 对象树验证转换和门控，不代表 Aspen 联调通过。
 
 测试：在项目 Python 环境中运行 `python -m unittest test_tools.py -v`。
