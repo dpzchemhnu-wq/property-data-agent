@@ -4,9 +4,11 @@ title Aspen Property Agent - One Click
 set "INSTALL_ROOT=%LOCALAPPDATA%\PropertyDataAgent"
 set "ZIP_PATH=%TEMP%\property-data-agent-main.zip"
 set "REPO_ZIP=https://github.com/dpzchemhnu-wq/property-data-agent/archive/refs/heads/main.zip"
+set "STATUS_FILE=%INSTALL_ROOT%\connection_status.txt"
 echo.
 echo [1/4] 正在准备网页程序...
 if not exist "%INSTALL_ROOT%" mkdir "%INSTALL_ROOT%"
+if exist "%INSTALL_ROOT%\local_launcher.py" del /q "%INSTALL_ROOT%\connection_status.txt" >nul 2>nul
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $zip='%ZIP_PATH%'; $root='%INSTALL_ROOT%'; $stage=Join-Path $env:TEMP ('property-data-agent-extract-' + [guid]::NewGuid().ToString('N')); try { Invoke-WebRequest -UseBasicParsing -Uri '%REPO_ZIP%' -OutFile $zip; Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force; $folder=Get-ChildItem -LiteralPath $stage -Directory | Select-Object -First 1; if(-not $folder){throw 'GitHub 压缩包没有项目目录'}; Get-ChildItem -LiteralPath $folder.FullName -Force | Copy-Item -Destination $root -Recurse -Force } finally { if(Test-Path -LiteralPath $stage){Remove-Item -LiteralPath $stage -Recurse -Force} }"
 if errorlevel 1 goto download_failed
 echo [2/4] 正在检查 Python...
@@ -16,7 +18,10 @@ if not errorlevel 1 (
   if not errorlevel 1 goto start_with_py
 )
 where python >nul 2>nul
-if not errorlevel 1 goto start_with_python
+if not errorlevel 1 (
+  python -c "import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)" >nul 2>nul
+  if not errorlevel 1 goto start_with_python
+)
 echo 未检测到 Python，尝试通过 Windows 包管理器安装 Python 3.12...
 where winget >nul 2>nul
 if errorlevel 1 goto python_missing
@@ -32,14 +37,17 @@ goto python_missing
 :start_with_py
 echo [3/4] 正在启动本机 Aspen 网页...
 py -3.12 "%INSTALL_ROOT%\local_launcher.py"
+if errorlevel 1 goto launcher_failed
 goto finished
 :start_with_python
 echo [3/4] 正在启动本机 Aspen 网页...
 python "%INSTALL_ROOT%\local_launcher.py"
+if errorlevel 1 goto launcher_failed
 goto finished
 :start_with_direct_python
 echo [3/4] 正在启动本机 Aspen 网页...
 "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" "%INSTALL_ROOT%\local_launcher.py"
+if errorlevel 1 goto launcher_failed
 goto finished
 :download_failed
 echo.
@@ -48,8 +56,16 @@ pause
 goto finished
 :python_missing
 echo.
-echo 无法自动安装 Python。请先安装 Python 3.12，再重新双击此文件。
+echo 未检测到可用的 Python 3.10 或更高版本，且无法自动安装 Python 3.12。
+echo 请先安装 Python 3.12，再重新双击此文件。
 echo 下载地址：https://www.python.org/downloads/windows/
+pause
+goto finished
+:launcher_failed
+echo.
+echo 本机连接器没有成功启动，网页不会收到配对信息。
+echo 请查看诊断文件：%INSTALL_ROOT%\connection_status.txt
+echo 若需要重新尝试，请关闭此窗口后再次运行 BAT。
 pause
 :finished
 endlocal

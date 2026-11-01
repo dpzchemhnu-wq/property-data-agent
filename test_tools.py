@@ -21,6 +21,7 @@ from aspen_connector import (
     _to_pascal,
 )
 from aspen_mcp_server import dispatch
+from local_launcher import _python312_command
 from llm_client import LLMServiceError, run_tool_loop
 from local_parser import parse_explicit_query, split_values
 from excel_export import build_stream_workbook
@@ -540,6 +541,17 @@ class LLMIntegrationTests(unittest.TestCase):
 
 
 class SimulationContractTests(unittest.TestCase):
+    @patch("local_launcher.shutil.which", return_value="py.exe")
+    @patch("local_launcher.subprocess.run", return_value=SimpleNamespace(stdout="3.12"))
+    def test_launcher_accepts_supported_python_launcher(self, run, _which):
+        self.assertEqual(_python312_command(), ["py.exe", "-3.12"])
+        self.assertEqual(run.call_args.args[0][:2], ["py.exe", "-3.12"])
+
+    @patch("local_launcher.shutil.which", return_value="py.exe")
+    @patch("local_launcher.subprocess.run", return_value=SimpleNamespace(stdout="3.9"))
+    def test_launcher_rejects_python_below_minimum_version(self, _run, _which):
+        self.assertIsNone(_python312_command())
+
     @patch("aspen_connector.requests.post")
     def test_session_specific_mcp_credentials_are_used_for_each_user(self, post):
         from aspen_connector import _mcp_request
