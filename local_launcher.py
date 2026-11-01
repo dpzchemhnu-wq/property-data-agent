@@ -122,9 +122,11 @@ def main() -> int:
             "aspen_open": "1",
         })
         online_url = ONLINE_APP_URL + ("&" if "?" in ONLINE_APP_URL else "?") + query
-        print("本机 Aspen 连接已启动；正在打开线上物性数据网页。")
+        print("本机连接已启动；正在复用现有浏览器窗口或打开线上物性数据网页。")
         print("保持本窗口开启，关闭后本机 Aspen 连接会自动断开。")
-        webbrowser.open(online_url)
+        # new=0 请求默认浏览器复用现有窗口；若没有可复用窗口，再由浏览器打开。
+        # 浏览器安全模型不允许脚本保证替换某个指定标签页。
+        webbrowser.open(online_url, new=0)
         while mcp.poll() is None and tunnel.poll() is None:
             time.sleep(1)
         return 1 if mcp.poll() is not None or tunnel.poll() is not None else 0

@@ -344,11 +344,15 @@ div[data-testid="stButton"] button[kind="primary"]:hover:not(:disabled) {
 }
 </style>
 """, unsafe_allow_html=True)
-selected_view = st.sidebar.radio(
-    "工作模块",
-    ["物性数据查询", "流程模拟调用"],
-    index=1 if st.query_params.get("aspen_open") == "1" else 0,
-)
+if st.query_params.get("aspen_open") == "1":
+    # 连接器携带一次性参数进入模拟页面后，配对逻辑会清除地址栏令牌；
+    # 将模块选择保存在会话里，避免清理 URL 后页面跳回物性查询首页。
+    st.session_state["work_module"] = "流程模拟调用"
+work_module_options = ["物性数据查询", "流程模拟调用"]
+work_module_kwargs: dict[str, Any] = {"key": "work_module"}
+if "work_module" not in st.session_state:
+    work_module_kwargs["index"] = 1 if st.query_params.get("aspen_open") == "1" else 0
+selected_view = st.sidebar.radio("工作模块", work_module_options, **work_module_kwargs)
 if selected_view == "流程模拟调用":
     render_simulation_page()
     st.stop()
