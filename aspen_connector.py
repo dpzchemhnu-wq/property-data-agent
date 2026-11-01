@@ -9,7 +9,6 @@ import os
 import queue
 import re
 import threading
-import tempfile
 from typing import Any, Callable
 from urllib.parse import quote
 
@@ -423,69 +422,6 @@ def read_case_streams(case_id: str) -> dict[str, Any]:
     if not case_id or not re.fullmatch(r"[0-9a-f]{20}", case_id):
         raise AspenConnectionError("案例标识无效；请重新扫描 Aspen 案例。")
     return _sta_call(lambda: _read_selected_on_com_thread(case_id))
-
-
-def _read_bkp_on_com_thread(file_path: str) -> dict[str, Any]:
-    """在 Windows Aspen 主机加载一个 BKP 并只读结果树。
-
-    不在这里自动运行流程；只有 BKP 自带可读取的收敛结果且错误数为 0
-    时才返回流股。Aspen COM 版本若不支持 InitFromArchive2 会明确失败。
-    """
-    if os.name != "nt":
-        raise AspenConnectionError("BKP 文件只能在安装 Aspen Plus 的 Windows 主机上解析；当前云端不是 Windows。")
-    if not file_path.lower().endswith(".bkp"):
-        raise AspenConnectionError("上传文件必须是 Aspen Plus .bkp 文件。")
-    if not os.path.isfile(file_path):
-        raise AspenConnectionError("上传的 BKP 文件在服务器临时目录中不存在。")
-    try:
-        import win32com.client
-        document = win32com.client.Dispatch("Apwn.Document")
-        initializer = getattr(document, "InitFromArchive2", None) or getattr(document, "InitFromArchive", None)
-        if initializer is None:
-            raise AspenConnectionError("当前 Aspen COM 版本未提供 BKP 归档加载接口 InitFromArchive2/InitFromArchive。")
-        initializer(os.path.abspath(file_path))
-        tree = document.Tree
-        error_count = _read_error_count(tree)
-        is_running = _engine_is_running(document)
-        if is_running is True:
-            raise AspenConnectionError("BKP 已加载但 Aspen 仍在计算；请等待计算停止后重试。")
-        if error_count != 0:
-            raise AspenConnectionError(f"BKP 已加载，但 Aspen 报告错误数为 {error_count!r}；未读取不完整流股。")
-        case_id = _case_id("uploaded-bkp", os.path.abspath(file_path))
-        payload = _read_streams(document, case_id)
-        if not payload["streams"]:
-            raise AspenConnectionError("BKP 已加载，但结果树中没有可读取流股。请确认案例已成功运行并保存结果。")
-        return {"status": "ok", "case_id": case_id, "file_path": os.path.abspath(file_path), **payload}
-    except AspenConnectionError:
-        raise
-    except Exception as exc:
-        raise AspenConnectionError(
-            "Aspen 无法加载该 BKP。请确认文件来自当前 Aspen Plus 版本、案例已成功运行并保存，"
-            f"且当前 Windows 用户有读取权限（{type(exc).__name__}）。"
-        ) from exc
-
-
-def read_bkp_file(file_name: str, file_bytes: bytes) -> dict[str, Any]:
-    """在本机 Windows Aspen 环境中读取上传的 BKP；云端严格返回诊断。"""
-    if not isinstance(file_bytes, (bytes, bytearray)) or not file_bytes:
-        raise AspenConnectionError("上传的 BKP 文件为空。")
-    if not str(file_name).lower().endswith(".bkp"):
-        raise AspenConnectionError("请选择 Aspen Plus 的 .bkp 文件。")
-    if os.name != "nt":
-        raise AspenConnectionError(
-            "当前网页运行在 Linux 云端，无法直接解析 Aspen BKP。请把文件上传到安装了 Aspen Plus 的 Windows 主机运行本地网页，"
-            "或在该主机启动 Aspen 桥接后读取已打开的案例。"
-        )
-    with tempfile.NamedTemporaryFile(prefix="property-agent-", suffix=".bkp", delete=False) as handle:
-        handle.write(bytes(file_bytes))
-        temp_path = handle.name
-    try:
-        return _sta_call(lambda: _read_bkp_on_com_thread(temp_path))
-    finally:
-        try:
-            os.unlink(temp_path)
-        except OSError:
-            pass
 
 
 def _bridge_request(path: str) -> dict[str, Any]:

@@ -1,5 +1,0 @@
-{
-  "streams": [
-    {"stream_id":"EXPORT-FEED","stream_name":"通用导出进料（示例）","phase":"liquid","flow_kmol_h":100,"T_K":298.15,"P_Pa":101325,"components":["water","ethanol"],"mole_fractions":[0.6,0.4]}
-  ]
-}
