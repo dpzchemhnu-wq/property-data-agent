@@ -223,19 +223,32 @@ def _start_tunnel() -> tuple[subprocess.Popen[str], str]:
     if not public_url:
         tunnel.terminate()
         raise SystemExit("90 秒内未能建立 HTTPS 隧道；请检查网络后重试。")
+    # URL 已分配，但隧道到 Cloudflare 边缘节点的连接可能尚未完全就绪。
+    # 继续等待日志中出现连接注册成功的标志，最多再等 20 秒。
+    ready_deadline = time.monotonic() + 20
+    while time.monotonic() < ready_deadline:
+        if tunnel.poll() is not None:
+            break
+        try:
+            line = lines.get(timeout=0.5)
+        except queue.Empty:
+            continue
+        if re.search(r"(Registered tunnel connection|Connection .* registered|Your tunnel is available)", line, flags=re.IGNORECASE):
+            break
+    time.sleep(3)  # 额外缓冲，确保边缘路由生效
     return tunnel, public_url.rstrip("/")
 
 
-def _wait_for_public_mcp(public_url: str, timeout_s: float = 20.0) -> None:
+def _wait_for_public_mcp(public_url: str, timeout_s: float = 60.0) -> None:
     """Confirm the temporary HTTPS route is live before sending a pairing URL."""
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(public_url + "/health", timeout=4) as response:
+            with urllib.request.urlopen(public_url + "/health", timeout=5) as response:
                 if response.status == 200:
                     return
         except Exception:
-            time.sleep(0.8)
+            time.sleep(1.0)
     raise SystemExit("HTTPS 隧道地址已生成，但暂时无法访问本机连接服务；请检查网络、防火墙或校园网策略。")
 
 
