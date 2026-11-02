@@ -69,6 +69,36 @@ def _python312_command() -> list[str] | None:
     return None
 
 
+def _kill_old_processes() -> None:
+    """杀掉旧的 MCP 和 cloudflared 进程，避免端口冲突。"""
+    if os.name != "nt":
+        return
+    try:
+        subprocess.run(
+            ["taskkill", "/f", "/im", "cloudflared.exe"],
+            capture_output=True, timeout=5,
+        )
+    except Exception:
+        pass
+    try:
+        # 只杀掉运行 aspen_mcp_server.py 的 python 进程，不影响其他 python。
+        result = subprocess.run(
+            ["wmic", "process", "where", "name='python.exe'", "get", "processid,commandline"],
+            capture_output=True, text=True, timeout=10,
+        )
+        for line in result.stdout.splitlines():
+            if "aspen_mcp_server.py" in line:
+                parts = line.strip().split()
+                if parts and parts[-1].isdigit():
+                    try:
+                        subprocess.run(["taskkill", "/f", "/pid", parts[-1]], capture_output=True, timeout=5)
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+    time.sleep(1.5)
+
+
 def _ensure_python() -> None:
     if not PYTHON.exists():
         base_python = _python312_command()
@@ -258,6 +288,8 @@ def main() -> int:
     _ensure_python()
     _status("正在安装/校验 GitHub 上游 Aspen Co-pilot（NCKU GESE）……")
     _ensure_upstream_agent()
+    # 清理旧的 MCP 和 cloudflared 进程，避免端口冲突。
+    _kill_old_processes()
     env = os.environ.copy()
     env["ASPEN_MCP_HOST"] = "127.0.0.1"
     env["ASPEN_MCP_PORT"] = "8765"
