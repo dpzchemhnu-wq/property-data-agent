@@ -26,10 +26,11 @@ def _render_result(result: dict) -> None:
     st.dataframe(result["property_rows"], width="stretch", hide_index=True)
     st.info("气相与液相分别按 Aspen 输出的状态计算；气液两相保留 Aspen 的 MIXED 总量、组成和汽相分率，并跳过单相物性模型。")
     workbook = build_stream_workbook(result["source_rows"], result["property_rows"])
+    bkp_name = result.get("file_name", "Aspen案例").rsplit(".", 1)[0]
     st.download_button(
         "下载流股与物性结果 Excel",
         data=workbook,
-        file_name="Aspen流股与Agent物性结果.xlsx",
+        file_name=f"{bkp_name}_流股物性结果.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         width="stretch",
     )
