@@ -218,13 +218,16 @@ def render_simulation_page() -> None:
         st.warning("未发现已停止运行、错误数为 0 且所有流股结果完整（温度、压力、摩尔流量、组成和相态均可读取）的案例；当前不允许选择。")
         return
 
-    st.markdown('<div class="selection-heading"><span class="eyebrow">SELECT SOURCE</span><h3>选择要读取的 BKP</h3><p>只有停止运行、错误数为 0 且所有物料流股完整的案例可选。</p></div>', unsafe_allow_html=True)
-    selection = st.selectbox(
+    st.markdown('<div class="selection-heading"><span class="eyebrow">SELECT SOURCE</span><h3>选择要读取的 BKP</h3><p>点击右侧小圆点选择案例，然后点"读取流股数据"。</p></div>', unsafe_allow_html=True)
+    options = {item["case_id"]: f"{item.get('file_name', 'Aspen 案例')} — {item.get('file_path', item.get('case_id', ''))}" for item in eligible}
+    selected_id = st.radio(
         "选择要查询的 BKP 案例",
-        eligible,
-        format_func=lambda item: f"{item.get('file_name', 'Aspen 案例')} — {item.get('file_path', item.get('case_id', ''))}",
+        options=list(options.keys()),
+        format_func=lambda cid: options[cid],
         key=f"aspen_case_select_{len(cases)}",
+        label_visibility="collapsed",
     )
+    selection = next(item for item in eligible if item["case_id"] == selected_id)
     if st.button("读取流股数据", key="read_aspen_streams", type="primary"):
         try:
             payload = read_streams(
