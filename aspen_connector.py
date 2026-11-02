@@ -409,10 +409,15 @@ def _scan_on_com_thread() -> dict[str, Any]:
 
 def scan_open_cases() -> dict[str, Any]:
     result = _sta_call(_scan_on_com_thread)
-    # MCP 长期运行时 COM/ROT 枚举偶尔返回空，自动重试一次提高稳定性。
-    if result.get("status") == "connected" and not result.get("cases"):
+    # MCP 长期运行时 COM 对象跨线程失效，导致后续扫描返回空；
+    # 彻底清除上游缓存后重试一次。
+    if not result.get("cases") and result.get("status") != "aspen_not_detected":
         import time as _time
-        _time.sleep(1.0)
+        import upstream_aspen_agent as _ua
+        _ua._loaded = None
+        _ua._manager = None
+        _ua._sessions.clear()
+        _time.sleep(2.0)
         result = _sta_call(_scan_on_com_thread)
     return result
 
