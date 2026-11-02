@@ -684,7 +684,13 @@ class SimulationContractTests(unittest.TestCase):
         with patch("aspen_connector._running_documents", return_value=[case_record]):
             inventory = _scan_on_com_thread()
         self.assertEqual(inventory["cases"][0]["run_status"], "converged")
-        self.assertTrue(inventory["cases"][0]["eligible"])
+        self.assertEqual(inventory["cases"][0]["stream_count"], 1)
+        self.assertEqual(inventory["cases"][0]["complete_stream_count"], 0)
+        self.assertFalse(inventory["cases"][0]["eligible"])
+
+        with patch("aspen_connector._running_documents", return_value=[case_record]):
+            with self.assertRaisesRegex(AspenConnectionError, "缺少完整输出"):
+                _read_selected_on_com_thread(_case_id(case_record[0], case_record[1]))
 
         document.Engine.IsRunning = True
         with patch("aspen_connector._running_documents", return_value=[case_record]):
@@ -738,6 +744,34 @@ class SimulationContractTests(unittest.TestCase):
         self.assertAlmostEqual(stream["flow_kmol_h"], 3.6)
         self.assertEqual(stream["components"], ["water", "ethanol"])
         self.assertEqual(stream["phase"], "two_phase")
+        self.assertEqual(stream["read_status"], "ok")
+        self.assertEqual(stream["missing_fields"], [])
+        self.assertAlmostEqual(stream["composition_sum"], 1.0)
+
+        nodes[r"\Data\Results Summary\Run-Status\Output\PER_ERROR"] = FakeNode("PER_ERROR", 0)
+        document = SimpleNamespace(
+            FullName=r"C:\Cases\valid.bkp",
+            Engine=SimpleNamespace(IsRunning=False),
+            Tree=tree,
+        )
+        record = ("!Apwn.Document.38.0", document.FullName, document)
+        with patch("aspen_connector._running_documents", return_value=[record]):
+            inventory = _scan_on_com_thread()
+        self.assertTrue(inventory["cases"][0]["eligible"])
+        self.assertEqual(inventory["cases"][0]["complete_stream_count"], 1)
+
+        nodes[r"\Data\Streams\S1\Output\MOLEFRAC\MIXED"] = FakeNode(
+            "MIXED", elements=[FakeNode("water", 0.6), FakeNode("ethanol", 0.2)]
+        )
+        incomplete = _read_streams(SimpleNamespace(Tree=tree), "0123456789abcdefabcd")["streams"][0]
+        self.assertEqual(incomplete["read_status"], "incomplete")
+        self.assertIn("valid_mole_fractions_sum", incomplete["missing_fields"])
+
+        nodes[r"\Data\Streams\S1\Output\MOLEFRAC\MIXED"] = fractions
+        nodes[r"\Data\Streams\S1\Output\VFRAC\MIXED"] = FakeNode("MIXED", 1.2)
+        invalid_phase = _read_streams(SimpleNamespace(Tree=tree), "0123456789abcdefabcd")["streams"][0]
+        self.assertEqual(invalid_phase["phase"], "unknown")
+        self.assertIn("vapor_fraction", invalid_phase["missing_fields"])
 
 
 if __name__ == "__main__":
