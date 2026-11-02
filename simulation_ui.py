@@ -139,7 +139,7 @@ def render_simulation_page() -> None:
             '<span class="connected-chip">● 已连接</span></div>', unsafe_allow_html=True,
         )
     else:
-        st.markdown('<div class="connect-panel"><div class="connect-panel-icon">↗</div><div><strong>连接本机 Aspen Plus</strong><p>连接器在 Windows 本机运行上游 Aspen Co-pilot，通过只读桥接返回案例状态和流股数据。</p></div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="connect-panel"><div class="connect-panel-icon">↗</div><div><strong>连接本机 Aspen Plus</strong></div></div>', unsafe_allow_html=True)
         connector_path = Path(__file__).with_name("Start Aspen Property Agent - One Click.bat")
         if connector_path.is_file():
             st.download_button(
