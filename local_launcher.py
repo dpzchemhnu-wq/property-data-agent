@@ -40,7 +40,7 @@ def _status(message: str) -> None:
 
 
 def _python312_command() -> list[str] | None:
-    """Return a verified Python 3.10+ executable command; never fall back to old Python."""
+    """Return a verified Python 3.11+ executable; Aspen Co-pilot requires 3.11."""
     candidates: list[list[str]] = []
     launcher = shutil.which("py")
     if launcher:
@@ -62,7 +62,7 @@ def _python312_command() -> list[str] | None:
                 capture_output=True, text=True, check=True, timeout=10,
             )
             version = tuple(int(part) for part in probe.stdout.strip().split(".")[:2])
-            if version >= (3, 10):
+            if version >= (3, 11):
                 return command
         except (OSError, subprocess.SubprocessError, ValueError):
             continue
@@ -73,7 +73,7 @@ def _ensure_python() -> None:
     if not PYTHON.exists():
         base_python = _python312_command()
         if not base_python:
-            raise SystemExit("未找到可用的 Python 3.10+。请先安装 Python 3.12，再重新运行此连接器。")
+            raise SystemExit("未找到可用的 Python 3.11+。请先安装 Python 3.12，再重新运行此连接器。")
         try:
             subprocess.check_call([*base_python, "-m", "venv", str(VENV)], cwd=ROOT)
         except subprocess.CalledProcessError as exc:
@@ -86,7 +86,7 @@ def _ensure_python() -> None:
         version = tuple(int(part) for part in probe.stdout.strip().split(".")[:2])
     except (OSError, subprocess.SubprocessError, ValueError) as exc:
         raise SystemExit("项目虚拟环境中的 Python 无法启动；请删除本机 PropertyDataAgent 文件夹后重新运行 BAT。") from exc
-    if version < (3, 10):
+    if version < (3, 11):
         raise SystemExit("项目虚拟环境中的 Python 版本过旧；请删除本机 PropertyDataAgent 文件夹后重新运行 BAT。")
     try:
         subprocess.check_call(

@@ -31,9 +31,21 @@ def load() -> tuple[Any, Any] | None:
     if str(package) not in sys.path:
         sys.path.insert(0, str(package))
     try:
+        # The published wheel deliberately ships the upstream flat modules inside
+        # ``aspen_mcp`` and its entry point puts that directory on sys.path. Keep
+        # the same import contract here, while accepting a normal package layout
+        # if the upstream project changes it later.
         manager_module = importlib.import_module("aspen_manager")
         server_module = importlib.import_module("server")
     except Exception:
+        try:
+            manager_module = importlib.import_module("aspen_mcp.aspen_manager")
+            server_module = importlib.import_module("aspen_mcp.server")
+        except Exception:
+            return None
+    if not callable(getattr(manager_module, "running_documents", None)):
+        return None
+    if not callable(getattr(manager_module, "AspenPlusManager", None)):
         return None
     _loaded = (manager_module, server_module)
     return _loaded

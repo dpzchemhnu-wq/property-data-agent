@@ -13,7 +13,7 @@
 
 ## 启动
 
-需要 Python 3.10 或更高版本。此机器已将 Python 3.12.10 安装在 `D:\Process Analysis\python312`，并将应用运行环境、依赖与缓存放在 `D:\Process Analysis` 下。
+需要 Python 3.11 或更高版本；上游 Aspen Co-pilot 的 `aspen-mcp` 包明确要求 Python >=3.11。此机器已将 Python 3.12.10 安装在 `D:\Process Analysis\python312`，并将应用运行环境、依赖与缓存放在 `D:\Process Analysis` 下。
 
 ```powershell
 cd outputs
