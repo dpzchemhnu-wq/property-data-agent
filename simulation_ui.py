@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import html
+import os
 from pathlib import Path
 
 import streamlit as st
@@ -9,13 +11,18 @@ import streamlit as st
 from aspen_connector import AspenConnectionError, read_streams, scan_cases
 from excel_export import build_stream_workbook
 from simulation import enrich_streams
+from upstream_aspen_agent import AGENT_NAME, REPOSITORY
 
 
 def _render_result(result: dict) -> None:
-    st.caption(f"当前案例：{result['file_name']}")
-    st.subheader("Aspen 流股数据")
+    st.markdown(
+        f'<div class="result-banner"><div><span class="eyebrow">已锁定案例</span><strong>{html.escape(result["file_name"])}</strong></div>'
+        '<span class="tag ok">完整结果</span></div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown('<div class="section-heading"><b>Aspen 流股数据</b><span>完整结果 · 单位已换算为 SI</span></div>', unsafe_allow_html=True)
     st.dataframe(result["source_rows"], width="stretch", hide_index=True)
-    st.subheader("Agent 物性查询结果")
+    st.markdown('<div class="section-heading"><b>物性处理结果</b><span>上游 Aspen Co-pilot 只读接入</span></div>', unsafe_allow_html=True)
     st.dataframe(result["property_rows"], width="stretch", hide_index=True)
     st.info("气相与液相分别按 Aspen 输出的状态计算；气液两相保留 Aspen 的 MIXED 总量、组成和汽相分率，并跳过单相物性模型。")
     workbook = build_stream_workbook(result["source_rows"], result["property_rows"])
@@ -28,8 +35,79 @@ def _render_result(result: dict) -> None:
     )
 
 
+def _case_tag(item: dict) -> tuple[str, str]:
+    if item.get("eligible"):
+        return "已停止", "ok"
+    if item.get("run_status") == "running":
+        return "正在计算", "warn"
+    if item.get("error_count") not in (None, 0):
+        return f"{item.get('error_count')} 个错误", "bad"
+    return "暂不可读", "warn"
+
+
+def _render_case_inventory(cases: list[dict]) -> None:
+    available_count = sum(bool(item.get("eligible")) for item in cases)
+    complete_count = sum(int(item.get("complete_stream_count", 0) or 0) for item in cases)
+    total_count = sum(int(item.get("stream_count", 0) or 0) for item in cases)
+    rows: list[str] = []
+    for item in cases:
+        status, kind = _case_tag(item)
+        validation = "通过" if item.get("eligible") else "拒绝读取"
+        validation_kind = "ok" if item.get("eligible") else "bad"
+        selected = " selected" if item.get("eligible") and not any(" selected" in row for row in rows) else ""
+        rows.append(
+            f'<div class="case-row{selected}">'
+            f'<div><b>{html.escape(str(item.get("file_name", "")))}</b>'
+            f'<span class="case-path">{html.escape(str(item.get("file_path", "")))}</span></div>'
+            f'<div><span class="tag {kind}">{html.escape(status)}</span></div>'
+            f'<div>{html.escape(str(item.get("error_count", "—")))}</div>'
+            f'<div>{int(item.get("complete_stream_count", 0) or 0)} / {int(item.get("stream_count", 0) or 0)}</div>'
+            f'<div><span class="tag {validation_kind}">{validation}</span></div>'
+            f'<div><input type="radio" disabled{" checked" if selected else ""}></div></div>'
+        )
+    st.markdown(
+        f'<div class="case-shell"><div class="shell-heading"><div><span class="eyebrow">CASE INVENTORY</span><h2>正在运行的 Aspen 案例</h2></div><span class="inventory-count">{available_count} 个可读取</span></div>'
+            f'<div class="sub">{html.escape(REPOSITORY)}　·　按完整路径区分同名 BKP　·　扫描到 {len(cases)} 个实例　·　完整流股 {complete_count} / {total_count}</div>'
+        f'<div class="case-list"><div class="case-row header"><div>案例文件</div><div>计算状态</div><div>错误数</div><div>流股完整度</div><div>状态校验</div><div>选择</div></div>{"".join(rows)}</div></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _demo_inventory() -> dict:
+    """Local-only visual QA data; enabled only with ASPN_DEMO_MODE=1."""
+    return {
+        "status": "connected",
+        "agent": {"name": AGENT_NAME, "repository": REPOSITORY},
+        "cases": [
+            {"case_id": "demo0000000000000001", "file_name": "methanol_loop.bkp", "file_path": r"D:\Process\Methanol\methanol_loop.bkp", "run_status": "converged", "error_count": 0, "stream_count": 12, "complete_stream_count": 12, "eligible": True},
+            {"case_id": "demo0000000000000002", "file_name": "methanol_loop.bkp", "file_path": r"D:\Archive\methanol_loop.bkp", "run_status": "running", "error_count": None, "stream_count": 0, "complete_stream_count": 0, "eligible": False},
+            {"case_id": "demo0000000000000003", "file_name": "flash_test.bkp", "file_path": r"D:\Process\Flash\flash_test.bkp", "run_status": "converged", "error_count": 2, "stream_count": 6, "complete_stream_count": 6, "eligible": False},
+        ],
+    }
+
+
+def _demo_result() -> dict:
+    source_rows = [
+        {"stream_id": "FEED", "stream_name": "FEED", "phase": "liquid", "flow_kmol_h": 100.0, "T_K": 298.15, "P_Pa": 2500000.0, "components": "METHANOL、WATER", "mole_fractions": "0.8, 0.2"},
+        {"stream_id": "VAPOR-OUT", "stream_name": "VAPOR-OUT", "phase": "gas", "flow_kmol_h": 86.32, "T_K": 523.15, "P_Pa": 2400000.0, "components": "METHANOL、WATER", "mole_fractions": "0.75, 0.25"},
+        {"stream_id": "FLASH-OUT", "stream_name": "FLASH-OUT", "phase": "two_phase", "flow_kmol_h": 13.68, "T_K": 342.5, "P_Pa": 101300.0, "components": "METHANOL、WATER", "mole_fractions": "0.7, 0.3"},
+    ]
+    property_rows = [
+        {"stream_id": "FEED", "stream_name": "FEED", "phase": "liquid", "phase_state": "single_liquid_assumed", "status": "ok", "density": 791.4, "density_unit": "kg/m3", "viscosity": 0.00062, "viscosity_unit": "Pa·s", "enthalpy": -184.2, "enthalpy_unit": "kJ/kg", "thermal_conductivity": 0.176, "thermal_conductivity_unit": "W/(m·K)"},
+        {"stream_id": "VAPOR-OUT", "stream_name": "VAPOR-OUT", "phase": "gas", "phase_state": "single_gas_detected", "status": "gas_partial", "density": 1.2, "density_unit": "kg/m3", "viscosity": 0.00002, "viscosity_unit": "Pa·s", "message": "仅返回可计算的气相属性。"},
+        {"stream_id": "FLASH-OUT", "stream_name": "FLASH-OUT", "phase": "two_phase", "status": "two_phase_skipped", "message": "气液两相保留 Aspen MIXED 数据，跳过单相物性模型。"},
+    ]
+    return {"case_id": "demo0000000000000001", "file_name": "methanol_loop.bkp", "source_rows": source_rows, "property_rows": property_rows}
+
+
 def render_simulation_page() -> None:
-    st.markdown('<div class="hero-title">流程模拟调用</div>', unsafe_allow_html=True)
+    demo_mode = os.getenv("ASPN_DEMO_MODE", "").strip() == "1" and str(st.query_params.get("aspen_demo", "")) == "1"
+    st.markdown(
+        '<div class="page-top"><div><div class="eyebrow">WORKSPACE / ASPEN PLUS</div>'
+        '<h1>流程模拟调用</h1><p>从本机 Aspen Plus 读取已完成计算的流股结果</p></div>'
+        f'<div class="agent-mark"><span class="agent-mark-dot"></span><span>{html.escape(AGENT_NAME)}</span><b>只读</b></div></div>',
+        unsafe_allow_html=True,
+    )
 
     # 连接器只绑定当前 Streamlit 用户会话。链接中的一次性随机令牌
     # 会立刻转存到 session_state 并从地址栏移除，避免多个用户共用 Render 环境变量。
@@ -52,14 +130,20 @@ def render_simulation_page() -> None:
 
     session_mcp_url = str(st.session_state.get("aspen_session_mcp_url", "")).strip()
     session_mcp_token = str(st.session_state.get("aspen_session_mcp_token", "")).strip()
-    if session_mcp_url and session_mcp_token:
-        st.success("本机 Aspen 连接器已配对。此连接属于当前浏览器会话。")
+    if demo_mode:
+        st.markdown(f'<div class="agent-card"><div class="agent-icon">◌</div><div><b>本机 Aspen 连接器</b><small>本地演示模式　·　模拟数据　·　{html.escape(AGENT_NAME)}</small></div><span class="demo-chip">模拟预览</span></div>', unsafe_allow_html=True)
+    elif session_mcp_url and session_mcp_token:
+        st.markdown(
+            f'<div class="agent-card"><div class="agent-icon">✓</div><div><b>本机 Aspen 连接器</b>'
+            f'<small>Windows 本地桥接已配对　·　只读模式　·　{AGENT_NAME}</small></div>'
+            '<span class="connected-chip">● 已连接</span></div>', unsafe_allow_html=True,
+        )
     else:
-        st.info("尚未连接本机 Aspen。运行下方连接器后，系统会自动刷新或打开网页并完成配对。")
+        st.markdown('<div class="connect-panel"><div class="connect-panel-icon">↗</div><div><strong>连接本机 Aspen Plus</strong><p>连接器在 Windows 本机运行上游 Aspen Co-pilot，通过只读桥接返回案例状态和流股数据。</p></div></div>', unsafe_allow_html=True)
         connector_path = Path(__file__).with_name("Start Aspen Property Agent - One Click.bat")
         if connector_path.is_file():
             st.download_button(
-                "下载并连接本机 Aspen（Windows）",
+                "下载 Windows 连接器",
                 data=connector_path.read_bytes(),
                 file_name=connector_path.name,
                 mime="application/octet-stream",
@@ -71,7 +155,7 @@ def render_simulation_page() -> None:
             st.write("浏览器不允许网页直接执行电脑上的 BAT 脚本。下载后请在浏览器下载栏点击该文件，并确认 Windows 的安全提示。之后连接器会自动打开已配对的线上页面；本窗口保持打开即可。")
 
     scan_clicked = st.button(
-        "扫描正在运行的 Aspen 案例",
+        "扫描本机案例",
         type="primary",
         key="scan_aspen_cases",
     )
@@ -97,6 +181,9 @@ def render_simulation_page() -> None:
                 with st.expander("连接诊断详情", expanded=False):
                     st.code(f"{type(exc).__name__}: {exc}")
 
+    if demo_mode:
+        st.session_state.aspen_case_inventory = _demo_inventory()
+        st.session_state.aspen_case_result = _demo_result()
     inventory = st.session_state.get("aspen_case_inventory")
     if not inventory:
         return
@@ -108,23 +195,14 @@ def render_simulation_page() -> None:
         st.info("未发现当前用户会话中打开的 Aspen BKP 案例。请先在 Aspen Plus 中打开并运行案例，再重新扫描。")
         return
 
-    st.dataframe(
-        [
-            {
-                "案例文件": item.get("file_name", ""),
-                "文件路径": item.get("file_path", ""),
-                "运行状态": item.get("run_status", "unknown"),
-                "错误数": item.get("error_count"),
-                "流股数": item.get("stream_count", 0),
-                "完整流股数": item.get("complete_stream_count", 0),
-                "可读取": bool(item.get("eligible")),
-                "判定依据": item.get("status_basis", ""),
-            }
-            for item in cases
-        ],
-        width="stretch",
-        hide_index=True,
-    )
+    m1, m2, m3 = st.columns(3)
+    with m1:
+        st.markdown(f'<div class="metric-card"><small>检测到的案例</small><strong>{len(cases)}</strong><span>▤</span></div>', unsafe_allow_html=True)
+    with m2:
+        st.markdown(f'<div class="metric-card"><small>可读取案例</small><strong class="green">{sum(bool(item.get("eligible")) for item in cases)}</strong><span>✓</span></div>', unsafe_allow_html=True)
+    with m3:
+        st.markdown(f'<div class="metric-card"><small>完整流股数据</small><strong>{sum(int(item.get("complete_stream_count", 0) or 0) for item in cases)} / {sum(int(item.get("stream_count", 0) or 0) for item in cases)}</strong><span>⇄</span></div>', unsafe_allow_html=True)
+    _render_case_inventory(cases)
     eligible = [
         item for item in cases
         if item.get("eligible") is True
@@ -136,15 +214,14 @@ def render_simulation_page() -> None:
         st.warning("未发现已停止运行、错误数为 0 且所有流股结果完整（温度、压力、摩尔流量、组成和相态均可读取）的案例；当前不允许选择。")
         return
 
+    st.markdown('<div class="selection-heading"><span class="eyebrow">SELECT SOURCE</span><h3>选择要读取的 BKP</h3><p>只有停止运行、错误数为 0 且所有物料流股完整的案例可选。</p></div>', unsafe_allow_html=True)
     selection = st.selectbox(
         "选择要查询的 BKP 案例",
         eligible,
-        format_func=lambda item: (
-            f"{item.get('file_name', 'Aspen 案例')} — {item.get('file_path', item.get('case_id', ''))}"
-        ),
+        format_func=lambda item: f"{item.get('file_name', 'Aspen 案例')} — {item.get('file_path', item.get('case_id', ''))}",
         key=f"aspen_case_select_{len(cases)}",
     )
-    if st.button("读取流股并查询物性", key="read_aspen_streams"):
+    if st.button("读取流股数据", key="read_aspen_streams", type="primary"):
         try:
             payload = read_streams(
                 selection["case_id"],

@@ -13,7 +13,7 @@
 
 ## 启动
 
-需要 Python 3.10 或更高版本。此机器已将 Python 3.12.10 安装在 `D:\Process Analysis\python312`，并将应用运行环境、依赖与缓存放在 `D:\Process Analysis` 下。
+需要 Python 3.11 或更高版本；上游 Aspen Co-pilot 的 `aspen-mcp` 包明确要求 Python >=3.11。此机器已将 Python 3.12.10 安装在 `D:\Process Analysis\python312`，并将应用运行环境、依赖与缓存放在 `D:\Process Analysis` 下。
 
 ```powershell
 cd outputs
@@ -83,6 +83,8 @@ ThermoML Search API 本身仅供检索元数据/摘要，不包含数值数据�
 ## Aspen Plus 连接
 
 线上地址：<https://property-data-agent-pvd5y6dm5iacitfwkhtsxe.streamlit.app/>。打开“流程模拟调用”后可下载本机 Aspen 连接器；扫描按钮始终可见，点击时检查当前网页是否已配对，未配对就提示先运行连接器，不会要求配置 Render 地址或令牌。
+
+本项目实际接入的上游智能体是 [NCKU GESE Aspen Co-pilot](https://github.com/nckugese/Aspen_Co-pilot)，固定 commit 为 `e705d9fba0dd5424f8dcf7afb99285e355b7abd9`。Windows 一键连接器会下载该 commit 的 `aspen-mcp`、用本地 Python 安装并执行其真实 Running Object Table / `AspenPlusManager.attach()` 逻辑；本项目外层 MCP 仅暴露两个只读工具，避免网页触发上游的写入/优化工具。若上游下载、安装、导入或 COM attach 任一步失败，连接器会在启动阶段明确停止，不会假装“已连接”。
 
 用户在装有 Aspen Plus 的 Windows 电脑上打开线上页面，点击下载按钮，然后在浏览器下载栏自行确认并运行 BAT。连接器会自动准备本地运行环境和依赖，启动只读 Aspen 桥接与临时 HTTPS 通道，再打开带有当前会话配对信息的网页。连接器窗口必须保持开启。之后点击扫描，页面列出当前会话中的所有 Aspen BKP 案例，并显示完整路径，以便区分同名文件。只有同时满足 Aspen 已停止、`PER_ERROR` 明确为 0、至少存在一条物料流股、且每条流股都能读出温度、压力、摩尔流量、组成和相态的案例才允许选择；摩尔分率须为有限的 0–1 数值且总和与 1 的偏差不超过 0.001，汽相分率必须在 0–1 之间。点击读取时再次校验这些条件。读取不完整时整例拒绝，不返回部分表格。连接器不会启动、修改或保存 BKP 文件。
 

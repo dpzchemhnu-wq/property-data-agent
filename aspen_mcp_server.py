@@ -13,6 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 from aspen_connector import AspenConnectionError, read_case_streams, scan_open_cases
+from upstream_aspen_agent import AGENT_NAME, AGENT_REF, REPOSITORY, status as upstream_status
 
 
 PROTOCOL_VERSION = "2024-11-05"
@@ -117,7 +118,13 @@ class _MCPHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path.rstrip("/") == "/health":
-            self._send(200, {"status": "ok", "service": "property-agent-aspen-mcp", "protocol": PROTOCOL_VERSION})
+            agent = upstream_status()
+            self._send(200, {
+                "status": "ok" if agent.get("available") else "degraded",
+                "service": "property-agent-aspen-mcp",
+                "protocol": PROTOCOL_VERSION,
+                "agent": {"name": AGENT_NAME, "repository": REPOSITORY, "ref": AGENT_REF, "available": agent.get("available", False)},
+            })
             return
         self._send(404, {"status": "error", "message": "MCP 服务只接受 /mcp 的 JSON-RPC 请求。"})
 
@@ -156,7 +163,8 @@ def main() -> None:
     server = ThreadingHTTPServer((host, port), _MCPHandler)
     server.mcp_token = token
     print(f"Aspen MCP 服务已启动：{host}:{port}/mcp")
-    print("仅开放 list_aspen_cases/read_aspen_streams 两个只读工具；要扫描案例，Aspen Plus 必须已安装并在当前 Windows 用户会话打开。")
+    print(f"上游智能体：{AGENT_NAME} ({REPOSITORY})")
+    print("网页只开放 list_aspen_cases/read_aspen_streams 两个只读工具；扫描使用上游 Aspen Co-pilot 的 ROT attach。")
     server.serve_forever()
 
 

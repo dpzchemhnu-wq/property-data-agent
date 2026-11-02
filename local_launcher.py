@@ -12,6 +12,7 @@ import sys
 import threading
 import time
 import urllib.request
+import zipfile
 from urllib.parse import urlencode
 import webbrowser
 from pathlib import Path
@@ -23,6 +24,10 @@ PYTHON = VENV / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 CLOUDFLARED = ROOT / "cloudflared.exe"
 ONLINE_APP_URL = "https://property-data-agent-pvd5y6dm5iacitfwkhtsxe.streamlit.app/"
 STATUS_FILE = ROOT / "connection_status.txt"
+UPSTREAM_COMMIT = "e705d9fba0dd5424f8dcf7afb99285e355b7abd9"
+UPSTREAM_ROOT = ROOT / "upstream" / f"aspen-copilot-{UPSTREAM_COMMIT}"
+UPSTREAM_SERVER = UPSTREAM_ROOT / "aspen-mcp"
+UPSTREAM_EXECUTABLE = VENV / ("Scripts/aspen-mcp.exe" if os.name == "nt" else "bin/aspen-mcp")
 
 
 def _status(message: str) -> None:
@@ -35,7 +40,7 @@ def _status(message: str) -> None:
 
 
 def _python312_command() -> list[str] | None:
-    """Return a verified Python 3.10+ executable command; never fall back to old Python."""
+    """Return a verified Python 3.11+ executable; Aspen Co-pilot requires 3.11."""
     candidates: list[list[str]] = []
     launcher = shutil.which("py")
     if launcher:
@@ -57,7 +62,7 @@ def _python312_command() -> list[str] | None:
                 capture_output=True, text=True, check=True, timeout=10,
             )
             version = tuple(int(part) for part in probe.stdout.strip().split(".")[:2])
-            if version >= (3, 10):
+            if version >= (3, 11):
                 return command
         except (OSError, subprocess.SubprocessError, ValueError):
             continue
@@ -68,7 +73,7 @@ def _ensure_python() -> None:
     if not PYTHON.exists():
         base_python = _python312_command()
         if not base_python:
-            raise SystemExit("未找到可用的 Python 3.10+。请先安装 Python 3.12，再重新运行此连接器。")
+            raise SystemExit("未找到可用的 Python 3.11+。请先安装 Python 3.12，再重新运行此连接器。")
         try:
             subprocess.check_call([*base_python, "-m", "venv", str(VENV)], cwd=ROOT)
         except subprocess.CalledProcessError as exc:
@@ -81,7 +86,7 @@ def _ensure_python() -> None:
         version = tuple(int(part) for part in probe.stdout.strip().split(".")[:2])
     except (OSError, subprocess.SubprocessError, ValueError) as exc:
         raise SystemExit("项目虚拟环境中的 Python 无法启动；请删除本机 PropertyDataAgent 文件夹后重新运行 BAT。") from exc
-    if version < (3, 10):
+    if version < (3, 11):
         raise SystemExit("项目虚拟环境中的 Python 版本过旧；请删除本机 PropertyDataAgent 文件夹后重新运行 BAT。")
     try:
         subprocess.check_call(
@@ -90,6 +95,60 @@ def _ensure_python() -> None:
         )
     except subprocess.CalledProcessError as exc:
         raise SystemExit("项目依赖安装失败；请检查网络连接后重新运行 BAT。") from exc
+
+
+def _ensure_upstream_agent() -> None:
+    """Install the upstream NCKU GESE Aspen Co-pilot MCP package from a pinned commit."""
+    pyproject = UPSTREAM_SERVER / "pyproject.toml"
+    if not pyproject.is_file():
+        archive_url = (
+            "https://api.github.com/repos/nckugese/Aspen_Co-pilot/zipball/"
+            + UPSTREAM_COMMIT
+        )
+        request = urllib.request.Request(
+            archive_url,
+            headers={"User-Agent": "PropertyDataAgent/1.0", "Accept": "application/vnd.github+json"},
+        )
+        stage = ROOT / "upstream" / f"download-{UPSTREAM_COMMIT}.zip"
+        stage.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response, stage.open("wb") as output:
+                shutil.copyfileobj(response, output)
+            with zipfile.ZipFile(stage) as archive:
+                prefix = archive.namelist()[0].split("/", 1)[0] + "/aspen-mcp/"
+                target_root = UPSTREAM_SERVER.resolve()
+                for member in archive.infolist():
+                    if not member.filename.startswith(prefix) or member.is_dir():
+                        continue
+                    relative = member.filename[len(prefix):]
+                    if not relative:
+                        continue
+                    target = (UPSTREAM_SERVER / relative).resolve()
+                    if not target.is_relative_to(target_root):
+                        raise SystemExit("上游 Aspen Co-pilot 安装包路径校验失败，已停止安装。")
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    with archive.open(member) as source, target.open("wb") as output:
+                        shutil.copyfileobj(source, output)
+        except SystemExit:
+            raise
+        except Exception as exc:
+            raise SystemExit(
+                f"无法从 GitHub 下载上游 Aspen Co-pilot：{type(exc).__name__}。请检查网络后重试。"
+            ) from exc
+        finally:
+            stage.unlink(missing_ok=True)
+    if not pyproject.is_file():
+        raise SystemExit("上游 Aspen Co-pilot 下载不完整（缺少 pyproject.toml）。")
+    if not UPSTREAM_EXECUTABLE.is_file():
+        try:
+            subprocess.check_call(
+                [str(PYTHON), "-m", "pip", "install", "--disable-pip-version-check", str(UPSTREAM_SERVER)],
+                cwd=ROOT,
+            )
+        except subprocess.CalledProcessError as exc:
+            raise SystemExit("上游 Aspen Co-pilot 安装失败；请检查 PyPI/GitHub 网络和 Python 依赖。") from exc
+    if not UPSTREAM_EXECUTABLE.is_file():
+        raise SystemExit("上游 Aspen Co-pilot 已下载，但没有生成 aspen-mcp 命令。")
 
 
 def _wait_for_mcp(process: subprocess.Popen[str], timeout_s: float = 15.0) -> None:
@@ -184,10 +243,14 @@ def main() -> int:
     if os.name != "nt":
         raise SystemExit("此一键连接器需要在安装 Aspen Plus 的 Windows 电脑运行。")
     _ensure_python()
+    _status("正在安装/校验 GitHub 上游 Aspen Co-pilot（NCKU GESE）……")
+    _ensure_upstream_agent()
     env = os.environ.copy()
     env["ASPEN_MCP_HOST"] = "127.0.0.1"
     env["ASPEN_MCP_PORT"] = "8765"
     env["ASPEN_MCP_TOKEN"] = secrets.token_urlsafe(32)
+    env["ASPEN_COPILOT_EXECUTABLE"] = str(UPSTREAM_EXECUTABLE)
+    env["ASPEN_COPILOT_COMMIT"] = UPSTREAM_COMMIT
 
     mcp = subprocess.Popen([str(PYTHON), "aspen_mcp_server.py"], cwd=ROOT, env=env)
     tunnel = None
