@@ -1,4 +1,9 @@
 @echo off
+if /i not "%~1"=="--connector-console" (
+  start "Aspen Property Agent Connector" cmd /k call "%~f0" --connector-console
+  exit /b
+)
+shift
 setlocal EnableExtensions
 title Aspen Property Agent - One Click
 set "INSTALL_ROOT=%LOCALAPPDATA%\PropertyDataAgent"
