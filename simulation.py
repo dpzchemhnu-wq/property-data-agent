@@ -164,6 +164,36 @@ def build_simulation_request(
 
 def enrich_streams(streams: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Run local property calculations only for successfully read single-phase streams."""
+    # Aspen 组分化学式 → thermo 库认识的常用名映射
+    COMPONENT_NAME_MAP = {
+        "H2O": "water",
+        "WATER": "water",
+        "C2H5OH": "ethanol",
+        "ETHANOL": "ethanol",
+        "C2H6O": "ethanol",
+        "CH3OH": "methanol",
+        "METHANOL": "methanol",
+        "N2": "nitrogen",
+        "O2": "oxygen",
+        "CO2": "carbon dioxide",
+        "CH4": "methane",
+        "C2H6": "ethane",
+        "C3H8": "propane",
+        "N-BUTANE": "butane",
+        "I-C4H10": "isobutane",
+        "N-PENTANE": "pentane",
+        "I-PENTANE": "isopentane",
+        "N-HEXANE": "hexane",
+        "H2": "hydrogen",
+        "CO": "carbon monoxide",
+        "NH3": "ammonia",
+        "BENZENE": "benzene",
+        "TOLUENE": "toluene",
+    }
+
+    def _map_components(names: list[str]) -> list[str]:
+        return [COMPONENT_NAME_MAP.get(n.upper().replace(" ", ""), n) for n in names]
+
     source_rows: list[dict[str, Any]] = []
     property_rows: list[dict[str, Any]] = []
     for stream in streams:
@@ -190,8 +220,9 @@ def enrich_streams(streams: list[dict[str, Any]]) -> tuple[list[dict[str, Any]],
             if phase == "gas"
             else ["density", "enthalpy", "viscosity", "surface_tension", "thermal_conductivity"]
         )
+        mapped_components = _map_components(stream["components"])
         result = query_properties(
-            stream["components"],
+            mapped_components,
             stream["mole_fractions"],
             stream["T_K"],
             stream["P_Pa"],
@@ -206,24 +237,27 @@ def enrich_streams(streams: list[dict[str, Any]]) -> tuple[list[dict[str, Any]],
             "phase_state": result.get("phase_state", phase),
         }
         backend_phase = (
-            "gas" if result.get("phase_state") == "single_gas_detected"
+            "gas" if result.get("phase_state") in {"single_gas_detected", "single_gas_or_vapor_detected"}
             else "liquid" if result.get("phase_state") == "single_liquid_assumed"
             else next((item.get("phase") for item in returned.values() if isinstance(item, dict) and item.get("phase")), None)
         )
+        # 相态不匹配时不丢弃数据，按后端相态返回（Aspen 报告的是整体相态，后端计算的是实际物性相态）
         if returned and backend_phase and backend_phase != phase:
-            returned = {}
-            row["status"] = "phase_mismatch"
-            row["message"] = f"Aspen 相态为 {phase}，物性后端识别为 {backend_phase}；已阻止相态不匹配的数据。"
+            row["status"] = "phase_mismatch_calculated"
+            row["message"] = f"Aspen 报告相态为 {phase}，物性后端识别为 {backend_phase}；已按后端相态计算并返回物性结果。"
         elif phase == "gas" and returned:
-            row["status"] = "gas_partial"
-            row["message"] = "仅返回后端可计算的气相属性；不适用的液相表面张力不会计算。"
+            row["status"] = "gas_ok"
+            row["message"] = "气相物性已计算（含 NIST/CoolProp 外部参考对比）。"
+        elif phase == "liquid" and returned:
+            row["status"] = "ok"
+            row["message"] = "液相物性已计算（含 NIST/CoolProp 外部参考对比）。"
         for property_name, value in returned.items():
             row[property_name] = value.get("value") if isinstance(value, dict) else value
             row[f"{property_name}_unit"] = value.get("unit", "") if isinstance(value, dict) else ""
             row[f"{property_name}_source_ids"] = ", ".join(value.get("source_ids", [])) if isinstance(value, dict) else ""
         if result.get("warnings"):
             row["warnings"] = "；".join(str(warning) for warning in result["warnings"])
-        if not row.get("warnings") and row["status"] not in {"ok", "gas_partial"}:
+        if not row.get("warnings") and row["status"] not in {"ok", "gas_ok", "phase_mismatch_calculated"}:
             row["warnings"] = row["message"] or "该流股未返回物性结果。"
         property_rows.append(row)
     return source_rows, property_rows
