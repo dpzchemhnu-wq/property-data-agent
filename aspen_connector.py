@@ -454,7 +454,17 @@ def _read_selected_on_com_thread(case_id: str) -> dict[str, Any]:
 def read_case_streams(case_id: str) -> dict[str, Any]:
     if not case_id or not re.fullmatch(r"[0-9a-f]{20}", case_id):
         raise AspenConnectionError("案例标识无效；请重新扫描 Aspen 案例。")
-    return _sta_call(lambda: _read_selected_on_com_thread(case_id))
+    try:
+        return _sta_call(lambda: _read_selected_on_com_thread(case_id))
+    except AspenConnectionError:
+        # COM 对象跨线程失效，清除全部上游缓存后重试一次。
+        import time as _time
+        import upstream_aspen_agent as _ua
+        _ua._loaded = None
+        _ua._manager = None
+        _ua._sessions.clear()
+        _time.sleep(2.0)
+        return _sta_call(lambda: _read_selected_on_com_thread(case_id))
 
 
 def _mcp_request(
