@@ -154,11 +154,15 @@ def render_simulation_page() -> None:
         with st.expander("为什么还需要打开下载的文件？", expanded=False):
             st.write("浏览器不允许网页直接执行电脑上的 BAT 脚本。下载后请在浏览器下载栏点击该文件，并确认 Windows 的安全提示。之后连接器会自动打开已配对的线上页面；本窗口保持打开即可。")
 
-    scan_clicked = st.button(
-        "扫描本机案例",
-        type="primary",
-        key="scan_aspen_cases",
-    )
+    diag_col, scan_col = st.columns([1, 1.2])
+    with diag_col:
+        st.button("连接诊断", key="diag_aspen_cases", disabled=not (session_mcp_url and session_mcp_token))
+    with scan_col:
+        scan_clicked = st.button(
+            "扫描本机案例",
+            type="primary",
+            key="scan_aspen_cases",
+        )
     auto_scan = bool(st.session_state.pop("aspen_auto_scan_pending", False))
     if scan_clicked or auto_scan:
         st.session_state.pop("aspen_case_result", None)
