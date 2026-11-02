@@ -19,7 +19,7 @@ if not errorlevel 1 (
 )
 where python >nul 2>nul
 if not errorlevel 1 (
-  python -c "import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)" >nul 2>nul
+  python -c "import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)" >nul 2>nul
   if not errorlevel 1 goto start_with_python
 )
 echo 未检测到 Python，尝试通过 Windows 包管理器安装 Python 3.12...
@@ -56,7 +56,7 @@ pause
 goto finished
 :python_missing
 echo.
-echo 未检测到可用的 Python 3.10 或更高版本，且无法自动安装 Python 3.12。
+echo 未检测到可用的 Python 3.11 或更高版本，且无法自动安装 Python 3.12。
 echo 请先安装 Python 3.12，再重新双击此文件。
 echo 下载地址：https://www.python.org/downloads/windows/
 pause
