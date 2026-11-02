@@ -17,7 +17,7 @@ def _render_result(result: dict) -> None:
     st.dataframe(result["source_rows"], width="stretch", hide_index=True)
     st.subheader("Agent 物性查询结果")
     st.dataframe(result["property_rows"], width="stretch", hide_index=True)
-    st.info("气相、液相分别按对应状态计算；两相或状态不完整的流股保留原始数据并标注未计算。")
+    st.info("气相与液相分别按 Aspen 输出的状态计算；气液两相保留 Aspen 的 MIXED 总量、组成和汽相分率，并跳过单相物性模型。")
     workbook = build_stream_workbook(result["source_rows"], result["property_rows"])
     st.download_button(
         "下载流股与物性结果 Excel",
@@ -112,25 +112,36 @@ def render_simulation_page() -> None:
         [
             {
                 "案例文件": item.get("file_name", ""),
+                "文件路径": item.get("file_path", ""),
                 "运行状态": item.get("run_status", "unknown"),
                 "错误数": item.get("error_count"),
                 "流股数": item.get("stream_count", 0),
+                "完整流股数": item.get("complete_stream_count", 0),
                 "可读取": bool(item.get("eligible")),
+                "判定依据": item.get("status_basis", ""),
             }
             for item in cases
         ],
         width="stretch",
         hide_index=True,
     )
-    eligible = [item for item in cases if item.get("eligible") is True and item.get("error_count") == 0]
+    eligible = [
+        item for item in cases
+        if item.get("eligible") is True
+        and item.get("error_count") == 0
+        and item.get("stream_count", 0) > 0
+        and item.get("complete_stream_count") == item.get("stream_count")
+    ]
     if not eligible:
-        st.warning("未发现已停止运行、错误数为 0 且状态可验证的案例；为避免读取不完整结果，当前不允许选择。")
+        st.warning("未发现已停止运行、错误数为 0 且所有流股结果完整（温度、压力、摩尔流量、组成和相态均可读取）的案例；当前不允许选择。")
         return
 
     selection = st.selectbox(
         "选择要查询的 BKP 案例",
         eligible,
-        format_func=lambda item: item.get("file_name", item.get("case_id", "Aspen 案例")),
+        format_func=lambda item: (
+            f"{item.get('file_name', 'Aspen 案例')} — {item.get('file_path', item.get('case_id', ''))}"
+        ),
         key=f"aspen_case_select_{len(cases)}",
     )
     if st.button("读取流股并查询物性", key="read_aspen_streams"):

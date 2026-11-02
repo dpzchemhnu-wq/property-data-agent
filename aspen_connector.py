@@ -344,18 +344,18 @@ def _read_streams(document: Any, case_id: str) -> dict[str, Any]:
                     fraction = float(component_node.Value)
                 except (TypeError, ValueError, AttributeError):
                     continue
-                if component and fraction >= 0:
+                if component and math.isfinite(fraction) and 0.0 <= fraction <= 1.0:
                     components.append(component)
                     mole_fractions.append(fraction)
         total = sum(mole_fractions)
-        if total > 0:
+        composition_valid = bool(components) and math.isfinite(total) and abs(total - 1.0) <= 1e-3
+        if composition_valid and total > 0:
             mole_fractions = [fraction / total for fraction in mole_fractions]
-        else:
-            components, mole_fractions = [], []
 
         vfrac_node = _find_node(tree, output, VAPOR_FRACTION_PATHS)
         vapor_fraction, _ = _number(vfrac_node, units)
-        if vapor_fraction is None:
+        if vapor_fraction is None or not 0.0 <= vapor_fraction <= 1.0:
+            vapor_fraction = None
             phase = "unknown"
         elif vapor_fraction <= 1e-6:
             phase = "liquid"
@@ -364,18 +364,33 @@ def _read_streams(document: Any, case_id: str) -> dict[str, Any]:
         else:
             phase = "two_phase"
 
-        streams.append({
+        stream = {
             "stream_id": name,
             "stream_name": name,
             "phase": phase,
             "vapor_fraction": vapor_fraction,
+            "composition_sum": total if components else None,
             "components": components,
             "mole_fractions": mole_fractions,
             "flow_kmol_h": flow_kmol_h,
             "T_K": T_K,
             "P_Pa": P_Pa,
             "units": {"T_K": "K", "P_Pa": "Pa", "flow_kmol_h": "kmol/h"},
-        })
+        }
+        missing = [field for field in ("T_K", "P_Pa", "flow_kmol_h") if stream[field] is None]
+        if not components or len(components) != len(mole_fractions):
+            missing.append("composition")
+        elif not composition_valid:
+            missing.append("valid_mole_fractions_sum")
+        if phase == "unknown":
+            missing.append("vapor_fraction")
+        stream["read_status"] = "ok" if not missing else "incomplete"
+        stream["missing_fields"] = missing
+        stream["read_message"] = (
+            "" if not missing else
+            "Aspen 结果不完整，缺少：" + "、".join(missing)
+        )
+        streams.append(stream)
 
     return {"case_id": case_id, "streams": streams}
 
@@ -387,10 +402,17 @@ def _scan_on_com_thread() -> dict[str, Any]:
         case_id = _case_id(moniker, path)
         error_count = _read_error_count(document.Tree)
         is_running = _engine_is_running(document)
-        streams_node = document.Tree.FindNode(r"\Data\Streams")
-        stream_names = [str(node.Name) for node in _collection_items(streams_node.Elements)] if streams_node else []
-        run_status = "running" if is_running is True else "converged" if is_running is False and error_count == 0 and stream_names else "unknown"
-        eligible = run_status == "converged" and error_count == 0
+        payload = _read_streams(document, _case_id(moniker, path))
+        streams = payload["streams"]
+        stream_count = len(streams)
+        complete_count = sum(stream.get("read_status") == "ok" for stream in streams)
+        run_status = "running" if is_running is True else "converged" if is_running is False and error_count == 0 and stream_count else "unknown"
+        eligible = (
+            run_status == "converged"
+            and error_count == 0
+            and stream_count > 0
+            and complete_count == stream_count
+        )
         cases.append({
             "case_id": case_id,
             "file_name": os.path.basename(path),
@@ -398,9 +420,14 @@ def _scan_on_com_thread() -> dict[str, Any]:
             "moniker": moniker,
             "run_status": run_status,
             "error_count": error_count,
-            "stream_count": len(stream_names),
+            "stream_count": stream_count,
+            "complete_stream_count": complete_count,
             "eligible": eligible,
-            "status_basis": "Aspen Engine.IsRunning=false, PER_ERROR=0, and stream tree present" if eligible else "Run status or error count could not be verified; case is not selectable",
+            "status_basis": (
+                "Aspen Engine.IsRunning=false, PER_ERROR=0, and every material stream has T/P/flow/composition/phase results"
+                if eligible else
+                "Run/error status or at least one material stream result is incomplete; case is not selectable"
+            ),
         })
     if cases:
         status = "connected"
@@ -431,17 +458,12 @@ def _read_selected_on_com_thread(case_id: str) -> dict[str, Any]:
     payload = _read_streams(document, case_id)
     if not payload["streams"]:
         raise AspenConnectionError("Aspen 案例未返回任何流股。")
-    for stream in payload["streams"]:
-        missing = [field for field in ("T_K", "P_Pa", "flow_kmol_h") if stream[field] is None]
-        if missing or not stream["components"]:
-            stream["read_status"] = "incomplete"
-            stream["read_message"] = "Aspen 输出缺少可确认的温度、压力、摩尔流量或组成。"
-        elif stream["phase"] == "unknown":
-            stream["read_status"] = "phase_unknown"
-            stream["read_message"] = "未能从 Aspen 输出判定气相分率；不调用单相物性模型。"
-        else:
-            stream["read_status"] = "ok"
-            stream["read_message"] = ""
+    incomplete = [stream for stream in payload["streams"] if stream.get("read_status") != "ok"]
+    if incomplete:
+        names = ", ".join(stream["stream_name"] for stream in incomplete)
+        raise AspenConnectionError(
+            "案例虽然已停止且 PER_ERROR=0，但以下流股缺少完整输出或相态信息，已拒绝整例读取：" + names
+        )
     return {"status": "ok", "case_id": case_id, "file_path": path, **payload}
 
 
