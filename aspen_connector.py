@@ -103,65 +103,27 @@ def _running_documents() -> list[tuple[str, str, Any]]:
     if os.name != "nt":
         raise AspenConnectionError("Aspen Plus COM 只能从 Windows 主机访问。")
     if importlib.util.find_spec("pythoncom") is None or importlib.util.find_spec("win32com") is None:
-        raise AspenConnectionError("当前 Python 环境未安装 pywin32；请在 Aspen 主机安装 requirements.txt 中的 Windows 依赖。")
-
-    import pythoncom
-    import win32com.client
-
-    objects: list[tuple[str, str, Any]] = []
-    identities: set[tuple[str, str]] = set()
-    rot = pythoncom.GetRunningObjectTable()
-    context = pythoncom.CreateBindCtx(0)
-    enumerator = rot.EnumRunning()
+        raise AspenConnectionError("当前 Python 环境未安装 pywin32；请重新运行 Windows Aspen 连接器。")
     try:
-        monikers = list(enumerator)
-    except Exception:
-        monikers = []
-        while True:
-            try:
-                item = enumerator.Next(1)
-                if not item:
-                    break
-                monikers.extend(item if isinstance(item, tuple) else [item])
-            except Exception:
-                break
-
-    for moniker in monikers:
-        try:
-            display_name = str(moniker.GetDisplayName(context, None))
-        except Exception:
-            continue
-        if "apwn.document" not in display_name.lower():
-            continue
-        try:
-            document = win32com.client.Dispatch(rot.GetObject(moniker))
-            tree = document.Tree
-            path = _document_path(document)
-            if not path or not tree:
-                continue
-            identity = (display_name, path.casefold())
-            if identity in identities:
-                continue
-            identities.add(identity)
-            objects.append((display_name, path, document))
-        except Exception:
-            continue
-
-    if not objects:
-        # Some Aspen releases expose the active document by ProgID without a useful ROT name.
-        for version in ("39.0", "38.0", "37.0", "36.0", "35.0", "34.0", "33.0", "32.0", "31.0"):
-            progid = f"Apwn.Document.{version}"
-            try:
-                document = win32com.client.GetActiveObject(progid)
-                path = _document_path(document)
-                if path and document.Tree:
-                    identity = (progid, path.casefold())
-                    if identity not in identities:
-                        identities.add(identity)
-                        objects.append((progid, path, document))
-            except Exception:
-                continue
-    return objects
+        from upstream_aspen_agent import discover_documents, app_for, available
+        if not available():
+            raise AspenConnectionError("未能加载 GitHub 上游 NCKU GESE Aspen Co-pilot；请重新运行 Windows 连接器安装。")
+        documents = []
+        for item in discover_documents():
+            app = app_for(str(item.get("path")), pid=item.get("pid"))
+            if app is not None:
+                documents.append({**item, "app": app})
+    except AspenConnectionError:
+        raise
+    except Exception as exc:
+        raise AspenConnectionError(
+            f"上游 Aspen Co-pilot 扫描失败：{type(exc).__name__}。请确认连接器安装成功且 Aspen Plus 已启动。"
+        ) from exc
+    return [
+        (f"NCKU-Aspen-Co-pilot:{item.get('pid', 'unknown')}", str(item["path"]), item["app"])
+        for item in documents
+        if item.get("path") and item.get("app") is not None
+    ]
 
 
 def _aspen_com_registered() -> bool:
@@ -451,6 +413,10 @@ def _read_selected_on_com_thread(case_id: str) -> dict[str, Any]:
     if found is None:
         raise AspenConnectionError("所选案例已关闭或 Aspen 连接发生变化；请重新扫描。")
     path, document = found
+    try:
+        from upstream_aspen_agent import AGENT_NAME
+    except Exception:
+        AGENT_NAME = "NCKU GESE Aspen Co-pilot / aspen-mcp"
     error_count = _read_error_count(document.Tree)
     is_running = _engine_is_running(document)
     if is_running is not False or error_count != 0:
@@ -464,7 +430,7 @@ def _read_selected_on_com_thread(case_id: str) -> dict[str, Any]:
         raise AspenConnectionError(
             "案例虽然已停止且 PER_ERROR=0，但以下流股缺少完整输出或相态信息，已拒绝整例读取：" + names
         )
-    return {"status": "ok", "case_id": case_id, "file_path": path, **payload}
+    return {"status": "ok", "case_id": case_id, "file_path": path, "upstream_agent": AGENT_NAME, **payload}
 
 
 def read_case_streams(case_id: str) -> dict[str, Any]:
