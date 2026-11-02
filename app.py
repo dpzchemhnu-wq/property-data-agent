@@ -382,6 +382,13 @@ work_module_kwargs: dict[str, Any] = {"key": "work_module"}
 if "work_module" not in st.session_state:
     work_module_kwargs["index"] = 1 if st.query_params.get("aspen_open") == "1" else 0
 selected_view = st.sidebar.radio("工作模块", work_module_options, **work_module_kwargs)
+st.sidebar.markdown('<div style="margin-bottom:1.2rem; color:#fff; font-size:1.15rem; font-weight:700; letter-spacing:.02em;">物性数据 Agent</div>', unsafe_allow_html=True)
+st.sidebar.markdown("""
+<div style="margin-top:1.5rem; padding-top:1rem; border-top:1px solid rgba(255,255,255,.1); color:#8aa5ab; font-size:.72rem; line-height:1.6;">
+<div style="color:#c2d4d8; font-weight:600; margin-bottom:.3rem;">NCKU GESE Aspen Co-pilot</div>
+只读桥接 · 固定 commit
+</div>
+""", unsafe_allow_html=True)
 if selected_view == "流程模拟调用":
     render_simulation_page()
     st.stop()
