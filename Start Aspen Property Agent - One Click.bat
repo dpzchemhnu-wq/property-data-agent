@@ -5,11 +5,14 @@ set "INSTALL_ROOT=%LOCALAPPDATA%\PropertyDataAgent"
 set "ZIP_PATH=%TEMP%\property-data-agent-main.zip"
 set "REPO_ZIP=https://github.com/dpzchemhnu-wq/property-data-agent/archive/refs/heads/main.zip"
 set "STATUS_FILE=%INSTALL_ROOT%\connection_status.txt"
+set "LOG_FILE=%INSTALL_ROOT%\startup.log"
 echo.
 echo [1/4] 正在准备网页程序...
 if not exist "%INSTALL_ROOT%" mkdir "%INSTALL_ROOT%"
+if not exist "%INSTALL_ROOT%" goto install_folder_failed
+echo [%date% %time%] Connector startup > "%LOG_FILE%"
 if exist "%INSTALL_ROOT%\local_launcher.py" del /q "%INSTALL_ROOT%\connection_status.txt" >nul 2>nul
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $zip='%ZIP_PATH%'; $root='%INSTALL_ROOT%'; $stage=Join-Path $env:TEMP ('property-data-agent-extract-' + [guid]::NewGuid().ToString('N')); try { Invoke-WebRequest -UseBasicParsing -Uri '%REPO_ZIP%' -OutFile $zip; Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force; $folder=Get-ChildItem -LiteralPath $stage -Directory | Select-Object -First 1; if(-not $folder){throw 'GitHub 压缩包没有项目目录'}; Get-ChildItem -LiteralPath $folder.FullName -Force | Copy-Item -Destination $root -Recurse -Force } finally { if(Test-Path -LiteralPath $stage){Remove-Item -LiteralPath $stage -Recurse -Force} }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $zip='%ZIP_PATH%'; $root='%INSTALL_ROOT%'; $stage=Join-Path $env:TEMP ('property-data-agent-extract-' + [guid]::NewGuid().ToString('N')); try { Invoke-WebRequest -UseBasicParsing -Uri '%REPO_ZIP%' -OutFile $zip; Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force; $folder=Get-ChildItem -LiteralPath $stage -Directory | Select-Object -First 1; if(-not $folder){throw 'GitHub 压缩包没有项目目录'}; Get-ChildItem -LiteralPath $folder.FullName -Force | Copy-Item -Destination $root -Recurse -Force } finally { if(Test-Path -LiteralPath $stage){Remove-Item -LiteralPath $stage -Recurse -Force} }" >> "%LOG_FILE%" 2>&1
 if errorlevel 1 goto download_failed
 echo [2/4] 正在检查 Python...
 where py >nul 2>nul
@@ -52,6 +55,14 @@ goto finished
 :download_failed
 echo.
 echo 项目下载失败。请检查电脑是否联网，或确认 GitHub 可以访问。
+echo 启动日志：%LOG_FILE%
+if exist "%LOG_FILE%" type "%LOG_FILE%"
+pause
+goto finished
+:install_folder_failed
+echo.
+echo 无法创建连接器目录：%INSTALL_ROOT%
+echo 请确认当前 Windows 用户有本地应用数据目录的写入权限。
 pause
 goto finished
 :python_missing
@@ -59,12 +70,17 @@ echo.
 echo 未检测到可用的 Python 3.11 或更高版本，且无法自动安装 Python 3.12。
 echo 请先安装 Python 3.12，再重新双击此文件。
 echo 下载地址：https://www.python.org/downloads/windows/
+echo 启动日志：%LOG_FILE%
+if exist "%LOG_FILE%" type "%LOG_FILE%"
 pause
 goto finished
 :launcher_failed
 echo.
 echo 本机连接器没有成功启动，网页不会收到配对信息。
 echo 请查看诊断文件：%INSTALL_ROOT%\connection_status.txt
+echo 启动日志：%LOG_FILE%
+if exist "%STATUS_FILE%" type "%STATUS_FILE%"
+if exist "%LOG_FILE%" type "%LOG_FILE%"
 echo 若需要重新尝试，请关闭此窗口后再次运行 BAT。
 pause
 :finished
