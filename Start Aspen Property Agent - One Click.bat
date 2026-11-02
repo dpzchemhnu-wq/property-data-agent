@@ -11,82 +11,64 @@ set "ZIP_PATH=%TEMP%\property-data-agent-main.zip"
 set "REPO_ZIP=https://github.com/dpzchemhnu-wq/property-data-agent/archive/refs/heads/main.zip"
 set "STATUS_FILE=%INSTALL_ROOT%\connection_status.txt"
 set "LOG_FILE=%INSTALL_ROOT%\startup.log"
+set "PSEXE=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 echo.
-echo [1/4] æ­£åœ¨å‡†å¤‡ç½‘é¡µç¨‹åº...
+echo [1/4] ÕıÔÚ×¼±¸ÍøÒ³³ÌĞò...
 if not exist "%INSTALL_ROOT%" mkdir "%INSTALL_ROOT%"
 if not exist "%INSTALL_ROOT%" goto install_folder_failed
 echo [%date% %time%] Connector startup > "%LOG_FILE%"
 if exist "%INSTALL_ROOT%\local_launcher.py" del /q "%INSTALL_ROOT%\connection_status.txt" >nul 2>nul
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $zip='%ZIP_PATH%'; $root='%INSTALL_ROOT%'; $stage=Join-Path $env:TEMP ('property-data-agent-extract-' + [guid]::NewGuid().ToString('N')); try { Invoke-WebRequest -UseBasicParsing -Uri '%REPO_ZIP%' -OutFile $zip; Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force; $folder=Get-ChildItem -LiteralPath $stage -Directory | Select-Object -First 1; if(-not $folder){throw 'GitHub å‹ç¼©åŒ…æ²¡æœ‰é¡¹ç›®ç›®å½•'}; Get-ChildItem -LiteralPath $folder.FullName -Force | Copy-Item -Destination $root -Recurse -Force } finally { if(Test-Path -LiteralPath $stage){Remove-Item -LiteralPath $stage -Recurse -Force} }" >> "%LOG_FILE%" 2>&1
+"%PSEXE%" -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $zip='%ZIP_PATH%'; $root='%INSTALL_ROOT%'; $stage=Join-Path $env:TEMP ('property-data-agent-extract-' + [guid]::NewGuid().ToString('N')); try { Invoke-WebRequest -UseBasicParsing -Uri '%REPO_ZIP%' -OutFile $zip; Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force; $folder=Get-ChildItem -LiteralPath $stage -Directory | Select-Object -First 1; if(-not $folder){throw 'GitHub zip no project dir'}; Get-ChildItem -LiteralPath $folder.FullName -Force | Copy-Item -Destination $root -Recurse -Force } finally { if(Test-Path -LiteralPath $stage){Remove-Item -LiteralPath $stage -Recurse -Force} }" >> "%LOG_FILE%" 2>&1
 if errorlevel 1 goto download_failed
-echo [2/4] æ­£åœ¨æ£€æŸ¥ Python...
-where py >nul 2>nul
-if not errorlevel 1 (
-  py -3.12 -c "import sys" >nul 2>nul
-  if not errorlevel 1 goto start_with_py
+echo [2/4] ÕıÔÚ¼ì²é Python...
+set "PYEXE="
+python -c "import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)" >nul 2>nul
+if not errorlevel 1 set "PYEXE=python"
+if not defined PYEXE (
+  py -3 -c "import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)" >nul 2>nul
+  if not errorlevel 1 set "PYEXE=py -3"
 )
-where python >nul 2>nul
-if not errorlevel 1 (
-  python -c "import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)" >nul 2>nul
-  if not errorlevel 1 goto start_with_python
+if not defined PYEXE (
+  if exist "%LOCALAPPDATA%\Programs\Python\Python313\python.exe" set "PYEXE=%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
 )
-echo æœªæ£€æµ‹åˆ° Pythonï¼Œå°è¯•é€šè¿‡ Windows åŒ…ç®¡ç†å™¨å®‰è£… Python 3.12...
-where winget >nul 2>nul
-if errorlevel 1 goto python_missing
-winget install --id Python.Python.3.12 --exact --silent --accept-package-agreements --accept-source-agreements
-if errorlevel 1 goto python_missing
-where py >nul 2>nul
-if not errorlevel 1 (
-  py -3.12 -c "import sys" >nul 2>nul
-  if not errorlevel 1 goto start_with_py
+if not defined PYEXE (
+  if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" set "PYEXE=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
 )
-if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" goto start_with_direct_python
-goto python_missing
-:start_with_py
-echo [3/4] æ­£åœ¨å¯åŠ¨æœ¬æœº Aspen ç½‘é¡µ...
-py -3.12 "%INSTALL_ROOT%\local_launcher.py"
-if errorlevel 1 goto launcher_failed
-goto finished
-:start_with_python
-echo [3/4] æ­£åœ¨å¯åŠ¨æœ¬æœº Aspen ç½‘é¡µ...
-python "%INSTALL_ROOT%\local_launcher.py"
-if errorlevel 1 goto launcher_failed
-goto finished
-:start_with_direct_python
-echo [3/4] æ­£åœ¨å¯åŠ¨æœ¬æœº Aspen ç½‘é¡µ...
-"%LOCALAPPDATA%\Programs\Python\Python312\python.exe" "%INSTALL_ROOT%\local_launcher.py"
+if not defined PYEXE goto python_missing
+echo [3/4] ÕıÔÚÆô¶¯±¾»ú Aspen ÍøÒ³...
+%PYEXE% "%INSTALL_ROOT%\local_launcher.py"
 if errorlevel 1 goto launcher_failed
 goto finished
 :download_failed
 echo.
-echo é¡¹ç›®ä¸‹è½½å¤±è´¥ã€‚è¯·æ£€æŸ¥ç”µè„‘æ˜¯å¦è”ç½‘ï¼Œæˆ–ç¡®è®¤ GitHub å¯ä»¥è®¿é—®ã€‚
-echo å¯åŠ¨æ—¥å¿—ï¼š%LOG_FILE%
+echo ÏîÄ¿ÏÂÔØÊ§°Ü¡£Çë¼ì²éµçÄÔÊÇ·ñÁªÍø£¬»òÈ·ÈÏ GitHub ¿ÉÒÔ·ÃÎÊ¡£
+echo Æô¶¯ÈÕÖ¾£º%LOG_FILE%
 if exist "%LOG_FILE%" type "%LOG_FILE%"
 pause
 goto finished
 :install_folder_failed
 echo.
-echo æ— æ³•åˆ›å»ºè¿æ¥å™¨ç›®å½•ï¼š%INSTALL_ROOT%
-echo è¯·ç¡®è®¤å½“å‰ Windows ç”¨æˆ·æœ‰æœ¬åœ°åº”ç”¨æ•°æ®ç›®å½•çš„å†™å…¥æƒé™ã€‚
+echo ÎŞ·¨´´½¨Á¬½ÓÆ÷Ä¿Â¼£º%INSTALL_ROOT%
+echo ÇëÈ·ÈÏµ±Ç° Windows ÓÃ»§ÓĞ±¾µØÓ¦ÓÃÊı¾İÄ¿Â¼µÄĞ´ÈëÈ¨ÏŞ¡£
 pause
 goto finished
 :python_missing
 echo.
-echo æœªæ£€æµ‹åˆ°å¯ç”¨çš„ Python 3.11 æˆ–æ›´é«˜ç‰ˆæœ¬ï¼Œä¸”æ— æ³•è‡ªåŠ¨å®‰è£… Python 3.12ã€‚
-echo è¯·å…ˆå®‰è£… Python 3.12ï¼Œå†é‡æ–°åŒå‡»æ­¤æ–‡ä»¶ã€‚
-echo ä¸‹è½½åœ°å€ï¼šhttps://www.python.org/downloads/windows/
-echo å¯åŠ¨æ—¥å¿—ï¼š%LOG_FILE%
+echo Î´¼ì²âµ½¿ÉÓÃµÄ Python 3.11 »ò¸ü¸ß°æ±¾¡£
+echo ÇëÏÈ°²×° Python 3.11+£¬ÔÙÖØĞÂË«»÷´ËÎÄ¼ş¡£
+echo ÏÂÔØµØÖ·£ºhttps://www.python.org/downloads/windows/
+echo Æô¶¯ÈÕÖ¾£º%LOG_FILE%
 if exist "%LOG_FILE%" type "%LOG_FILE%"
 pause
 goto finished
 :launcher_failed
 echo.
-echo æœ¬æœºè¿æ¥å™¨æ²¡æœ‰æˆåŠŸå¯åŠ¨ï¼Œç½‘é¡µä¸ä¼šæ”¶åˆ°é…å¯¹ä¿¡æ¯ã€‚
-echo è¯·æŸ¥çœ‹è¯Šæ–­æ–‡ä»¶ï¼š%INSTALL_ROOT%\connection_status.txt
-echo å¯åŠ¨æ—¥å¿—ï¼š%LOG_FILE%
+echo ±¾»úÁ¬½ÓÆ÷Ã»ÓĞ³É¹¦Æô¶¯£¬ÍøÒ³²»»áÊÕµ½Åä¶ÔĞÅÏ¢¡£
+echo Çë²é¿´Õï¶ÏÎÄ¼ş£º%INSTALL_ROOT%\connection_status.txt
+echo Æô¶¯ÈÕÖ¾£º%LOG_FILE%
 if exist "%STATUS_FILE%" type "%STATUS_FILE%"
 if exist "%LOG_FILE%" type "%LOG_FILE%"
-echo è‹¥éœ€è¦é‡æ–°å°è¯•ï¼Œè¯·å…³é—­æ­¤çª—å£åå†æ¬¡è¿è¡Œ BATã€‚
+echo ÈôĞèÒªÖØĞÂ³¢ÊÔ£¬Çë¹Ø±Õ´Ë´°¿ÚºóÔÙ´ÎÔËĞĞ BAT¡£
 pause
 :finished
 endlocal
