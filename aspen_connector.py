@@ -166,6 +166,13 @@ def _unit_table(tree: Any) -> dict[tuple[int, int], str]:
 
 
 def _node_unit(node: Any, units: dict[tuple[int, int], str]) -> str:
+    # Aspen Plus 40+ exposes the unit directly as UnitString (e.g. "C", "bar", "kmol/hr").
+    try:
+        unit = str(getattr(node, "UnitString", "")).strip()
+        if unit:
+            return unit
+    except Exception:
+        pass
     try:
         row = int(node.AttributeValue("HAP_UNITROW"))
         col = int(node.AttributeValue("HAP_UNITCOL"))
@@ -401,7 +408,13 @@ def _scan_on_com_thread() -> dict[str, Any]:
 
 
 def scan_open_cases() -> dict[str, Any]:
-    return _sta_call(_scan_on_com_thread)
+    result = _sta_call(_scan_on_com_thread)
+    # MCP 长期运行时 COM/ROT 枚举偶尔返回空，自动重试一次提高稳定性。
+    if result.get("status") == "connected" and not result.get("cases"):
+        import time as _time
+        _time.sleep(1.0)
+        result = _sta_call(_scan_on_com_thread)
+    return result
 
 
 def _read_selected_on_com_thread(case_id: str) -> dict[str, Any]:
