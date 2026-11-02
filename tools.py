@@ -1160,63 +1160,69 @@ def query_properties(
                 except Exception:
                     pass
             unavailable = [name for name in requested if name not in partial_properties]
-            return _failure(
-                "out_of_domain",
-                "当前温度和压力下组分处于气态；未返回液相密度、液相粘度、表面张力或液相热导率。请降低温度或提高压力后重查。",
-                phase_state="single_gas_detected",
-                components=[{"name": c.input_name, "cas": c.cas} for c in resolved],
-                mole_fractions=xs, input_mole_fractions=input_xs, T_K=T, P_Pa=P,
-                partial_properties=partial_properties,
-                unavailable_properties=unavailable,
-                warnings=["当前状态为气态；已按气相相关式返回适用属性，不适用的液相表面张力不返回。"]
-                + ([normalization_warning] if normalization_warning else []),
-            )
-        if phase and phase not in {"l", "liquid"}:
-            return _failure("solver_failed", "当前状态无法确认液相，未返回不可靠的液相数据。")
-        bubble_temperature = _bubble_point(xs, P, resolved, model, parameter_rows, ledger, mixture)
-        if T >= bubble_temperature:
-            return _failure(
-                "out_of_domain",
-                f"当前状态已超过泡点（约 {bubble_temperature:.2f} K），物质不是液体；液相物性未返回。请降低温度或提高压力。",
-                phase_state="single_gas_or_vapor_detected",
-                components=[{"name": c.input_name, "cas": c.cas} for c in resolved],
-                mole_fractions=xs,
-                input_mole_fractions=input_xs,
-                T_K=T,
-                P_Pa=P,
-                bubble_point_K=bubble_temperature,
-                warnings=[normalization_warning] if normalization_warning else [],
-            )
+            properties = partial_properties
+            phase_state = "single_gas_detected"
+            warnings = [
+                "当前状态为气态；已按气相相关式返回适用属性，不适用的液相表面张力不返回。",
+                "摩尔焓采用 thermo 库默认基准；下游流程模型使用前必须对齐焓零点。",
+            ]
+            if normalization_warning:
+                warnings.append(normalization_warning)
+            thermo_source = {
+                "model": "gas_default",
+                "label": "气相物性（thermo 默认气相相关式）",
+                "decision_basis": f"检测到相态为气相（{phase}），使用气相密度/粘度/热导率相关式。",
+                "parameter_source_ids": [],
+                "model_scope": "气相 rho、mu、k 使用 thermo 的默认气相相关式；不适用液相表面张力。",
+            }
+        else:
+            if phase and phase not in {"l", "liquid"}:
+                return _failure("solver_failed", "当前状态无法确认液相，未返回不可靠的液相数据。")
+            bubble_temperature = _bubble_point(xs, P, resolved, model, parameter_rows, ledger, mixture)
+            if T >= bubble_temperature:
+                return _failure(
+                    "out_of_domain",
+                    f"当前状态已超过泡点（约 {bubble_temperature:.2f} K），物质不是液体；液相物性未返回。请降低温度或提高压力。",
+                    phase_state="single_gas_or_vapor_detected",
+                    components=[{"name": c.input_name, "cas": c.cas} for c in resolved],
+                    mole_fractions=xs,
+                    input_mole_fractions=input_xs,
+                    T_K=T,
+                    P_Pa=P,
+                    bubble_point_K=bubble_temperature,
+                    warnings=[normalization_warning] if normalization_warning else [],
+                )
+            phase_state = "single_liquid_assumed"
 
-        # 只计算并返回用户勾选/请求的物性；泡点仍在内部计算，用于确认输入状态确实为液相。
-        requested = list(dict.fromkeys(target_properties))
-        property_calculators: dict[str, Any] = {
-            "density": lambda: {**_number_from_mixture(mixture, "液相密度", "rhol"), "unit": "kg/m3", "source_ids": ["thermo_Mixture_default_v1"]},
-            "enthalpy": lambda: {**_number_from_mixture(mixture, "摩尔焓", "Hm", 1e-3), "unit": "kJ/mol", "reference_state": "thermo 库默认焓基准；使用前须与下游模型对齐零点", "source_ids": ["thermo_Mixture_default_v1"]},
-            "viscosity": lambda: {**_number_from_mixture(mixture, "动力粘度", "mul", 1e3), "unit": "mPa·s", "source_ids": ["thermo_Mixture_default_v1"]},
-            "surface_tension": lambda: {**_number_from_mixture(mixture, "表面张力", "sigma", 1e3), "unit": "mN/m", "source_ids": ["thermo_Mixture_default_v1"]},
-            "thermal_conductivity": lambda: {**_number_from_mixture(mixture, "热导率", "kl"), "unit": "W/(m·K)", "source_ids": ["thermo_Mixture_default_v1"]},
-            "bubble_point": lambda: {"value": bubble_temperature, "unit": "K", "source_ids": [f"thermo_{model}_bubble_v1"] + [str(row["source_id"]) for row in parameter_rows]},
-        }
-        properties: dict[str, Any] = {key: property_calculators[key]() for key in requested}
-        thermo_source = {
-            "model": model,
-            "label": ("NRTL (系统检测到文献参数)" if model == "NRTL" else
-                      "UNIQUAC (系统检测到文献参数)" if model == "UNIQUAC" else
-                      "UNIFAC (未检测到实验参数，已降级估算)" if model == "UNIFAC" else "纯组分"),
-            "decision_basis": rationale,
-            "parameter_source_ids": sorted({str(row["source_id"]) for row in parameter_rows}),
-            "model_scope": "所选活度模型用于改进拉乌尔定律泡点计算（假设理想气相）；rho、Hm、mu、sigma、k 使用 thermo 的默认属性相关式。",
-        }
-        warnings = [
-            "相态字段为 single_liquid_assumed；本工具未执行严格液液平衡（LLE）稳定性校核。",
-            "摩尔焓采用 thermo 库默认基准；下游流程模型使用前必须对齐焓零点。",
-            "泡点使用改进拉乌尔定律，气相按理想气体处理；高压或强气相非理想体系需另行校核。",
-        ]
-        if model == "UNIFAC":
-            warnings.extend(["未找到覆盖全部二元对的文献参数，当前非理想性/泡点为 UNIFAC 模型估算，置信度低。", "低置信度，建议实验校核。"])
-        elif model == "NRTL" and all(_pair_record(ledger, resolved[i].cas, resolved[j].cas, "UNIQUAC") for i in range(len(resolved)) for j in range(i + 1, len(resolved))):
-            warnings.append("台账同时存在 UNIQUAC 参数；可用其进行交叉验证。")
+            # 只计算并返回用户勾选/请求的物性
+            requested = list(dict.fromkeys(target_properties))
+            property_calculators: dict[str, Any] = {
+                "density": lambda: {**_number_from_mixture(mixture, "液相密度", "rhol"), "unit": "kg/m3", "source_ids": ["thermo_Mixture_default_v1"]},
+                "enthalpy": lambda: {**_number_from_mixture(mixture, "摩尔焓", "Hm", 1e-3), "unit": "kJ/mol", "reference_state": "thermo 库默认焓基准；使用前须与下游模型对齐零点", "source_ids": ["thermo_Mixture_default_v1"]},
+                "viscosity": lambda: {**_number_from_mixture(mixture, "动力粘度", "mul", 1e3), "unit": "mPa·s", "source_ids": ["thermo_Mixture_default_v1"]},
+                "surface_tension": lambda: {**_number_from_mixture(mixture, "表面张力", "sigma", 1e3), "unit": "mN/m", "source_ids": ["thermo_Mixture_default_v1"]},
+                "thermal_conductivity": lambda: {**_number_from_mixture(mixture, "热导率", "kl"), "unit": "W/(m·K)", "source_ids": ["thermo_Mixture_default_v1"]},
+                "bubble_point": lambda: {"value": bubble_temperature, "unit": "K", "source_ids": [f"thermo_{model}_bubble_v1"] + [str(row["source_id"]) for row in parameter_rows]},
+            }
+            properties: dict[str, Any] = {key: property_calculators[key]() for key in requested}
+            thermo_source = {
+                "model": model,
+                "label": ("NRTL (系统检测到文献参数)" if model == "NRTL" else
+                          "UNIQUAC (系统检测到文献参数)" if model == "UNIQUAC" else
+                          "UNIFAC (未检测到实验参数，已降级估算)" if model == "UNIFAC" else "纯组分"),
+                "decision_basis": rationale,
+                "parameter_source_ids": sorted({str(row["source_id"]) for row in parameter_rows}),
+                "model_scope": "所选活度模型用于改进拉乌尔定律泡点计算（假设理想气相）；rho、Hm、mu、sigma、k 使用 thermo 的默认属性相关式。",
+            }
+            warnings = [
+                "相态字段为 single_liquid_assumed；本工具未执行严格液液平衡（LLE）稳定性校核。",
+                "摩尔焓采用 thermo 库默认基准；下游流程模型使用前必须对齐焓零点。",
+                "泡点使用改进拉乌尔定律，气相按理想气体处理；高压或强气相非理想体系需另行校核。",
+            ]
+            if model == "UNIFAC":
+                warnings.extend(["未找到覆盖全部二元对的文献参数，当前非理想性/泡点为 UNIFAC 模型估算，置信度低。", "低置信度，建议实验校核。"])
+            elif model == "NRTL" and all(_pair_record(ledger, resolved[i].cas, resolved[j].cas, "UNIQUAC") for i in range(len(resolved)) for j in range(i + 1, len(resolved))):
+                warnings.append("台账同时存在 UNIQUAC 参数；可用其进行交叉验证。")
 
         allowed_reference_sources = {"nist", "thermoml", "coolprop"}
         if reference_sources is None:
@@ -1307,7 +1313,7 @@ def query_properties(
             "P_Pa": P,
             "properties": properties,
             "requested_properties": requested,
-            "phase_state": "single_liquid_assumed",
+            "phase_state": phase_state,
             "thermo_model": thermo_source,
             "references": {"nist": nist, "thermoml": thermoml, "coolprop": coolprop},
             "warnings": warnings,
