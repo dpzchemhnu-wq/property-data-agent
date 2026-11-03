@@ -212,23 +212,42 @@ def render_result(result: dict[str, Any]) -> None:
     if status != "ok":
         message = f"{status}: {result.get('message', '')}"
         if result.get("phase_state") in {"single_gas_detected", "single_gas_or_vapor_detected"}:
-            st.caption("当前状态：气态；液相物性未返回。")
+            st.markdown(
+                '<div class="status-banner warn"><span class="banner-ico">◔</span>'
+                '<div><b>当前为气态</b>液相物性未返回；下方保留仍可计算的部分数据。</div></div>',
+                unsafe_allow_html=True,
+            )
             partial = result.get("partial_properties", {})
             if partial:
-                st.caption("详情中保留了当前气相下仍可计算的部分数据。")
-                partial_rows = [{
-                    "物性（单位）": f"{TARGET_PROPERTIES.get(key, key)} ({item.get('unit', '')})",
-                    "当前状态值": _bare_value(item.get("value")),
-                    "相态": item.get("phase", "当前状态"),
-                    "来源": ", ".join(item.get("source_ids", [])) or "—",
-                } for key, item in partial.items()]
-                st.dataframe(partial_rows, width="stretch", hide_index=True)
+                partial_cards: list[str] = []
+                for key, item in partial.items():
+                    label = TARGET_PROPERTIES.get(key, key)
+                    unit_badge = (
+                        f'<span class="prop-unit-badge">{html.escape(str(item.get("unit", "")))}</span>'
+                        if item.get("unit") else ""
+                    )
+                    partial_src = ", ".join(item.get("source_ids", [])) or "—"
+                    partial_cards.append(
+                        f'<div class="prop-card"><span class="prop-label"><span>{html.escape(label)}</span>{unit_badge}</span>'
+                        f'<div class="prop-value">{html.escape(_bare_value(item.get("value")))}</div>'
+                        f'<div class="prop-meta"><span class="tag neutral">相态 {html.escape(str(item.get("phase", "当前状态")))}</span>'
+                        f'<span class="tag neutral">{html.escape(partial_src)}</span></div></div>'
+                    )
+                st.markdown(f'<div class="prop-grid">{"".join(partial_cards)}</div>', unsafe_allow_html=True)
         if status in {"needs_input", "out_of_domain"}:
-            st.caption("本次查询：🔴 0 项错误，🟡 1 项需要补充或检查。")
+            st.markdown(
+                '<div class="status-banner warn"><span class="banner-ico">ⓘ</span>'
+                '<div><b>需要补充输入</b>请检查或补充参数后重新查询。</div></div>',
+                unsafe_allow_html=True,
+            )
             with st.expander("查看详情", expanded=False):
                 st.warning(result.get("message", "请检查或补充输入参数。"))
         else:
-            st.caption("本次查询：🔴 1 项错误，🟡 0 项提醒。")
+            st.markdown(
+                '<div class="status-banner err"><span class="banner-ico">✕</span>'
+                '<div><b>本次查询未完成</b>计算过程中出现错误。</div></div>',
+                unsafe_allow_html=True,
+            )
             with st.expander("查看详情", expanded=False):
                 st.error(message)
         return
@@ -265,6 +284,10 @@ def render_result(result: dict[str, Any]) -> None:
         item = result["properties"].get(key)
         if not item:
             continue
+        unit_badge = (
+            f'<span class="prop-unit-badge">{html.escape(str(item.get("unit", "")))}</span>'
+            if item.get("unit") else ""
+        )
         property_label = f"{label} ({item.get('unit', '')})" if item.get("unit") else label
         model_source = ", ".join(item.get("source_ids", [])) or "thermo"
         badges = [f'<span class="tag neutral">{html.escape(model_source)}</span>']
@@ -277,7 +300,7 @@ def render_result(result: dict[str, Any]) -> None:
                 mark = " ⚠" if flagged else ""
                 badges.append(f'<span class="tag {kind}">vs {source_labels[source]} {deviation:.2f}%{mark}</span>')
         property_cards.append(
-            f'<div class="prop-card"><span class="prop-label">{html.escape(property_label)}</span>'
+            f'<div class="prop-card"><span class="prop-label"><span>{html.escape(label)}</span>{unit_badge}</span>'
             f'<div class="prop-value">{html.escape(_bare_value(item.get("value")))}</div>'
             f'<div class="prop-meta">{"".join(badges)}</div></div>'
         )
@@ -297,13 +320,19 @@ def render_result(result: dict[str, Any]) -> None:
                 "来源标识": (reference.get("doi") or reference.get("source_id") or "—") if reference else "—",
             })
     if property_cards:
+        prop_key_labels = "、".join(html.escape(str(TARGET_PROPERTIES.get(k, k))) for k in requested_properties)
+        st.markdown(f'<div class="ref-strip" style="margin-bottom:.35rem;"><span class="eyebrow">PROPERTY RESULTS</span><span style="color:#678087;font-size:.66rem;">{prop_key_labels}</span></div>', unsafe_allow_html=True)
         st.markdown(f'<div class="prop-grid">{"".join(property_cards)}</div>', unsafe_allow_html=True)
 
     # —— 参考源覆盖状态徽标 ——
     if pure_component:
         nist_errors = [item.get("message", "") for item in nist_status if isinstance(item, dict) and item.get("unavailable")]
         if nist_errors:
-            st.caption("参考源状态：NIST WebBook 连接失败（此次无法判断是否覆盖）；ThermoML 不适用。")
+            st.markdown(
+                '<div class="status-banner warn"><span class="banner-ico">◔</span>'
+                '<div><b>参考源状态</b>NIST WebBook 连接失败（此次无法判断是否覆盖）；ThermoML 不适用。</div></div>',
+                unsafe_allow_html=True,
+            )
         else:
             st.markdown(f'<div class="ref-strip"><span class="eyebrow">REFERENCE SOURCES</span>{_coverage_badges(pure_component=pure_component, nist_status=nist_status, thermoml_status=thermoml_status, coolprop_status=coolprop_status)}</div>', unsafe_allow_html=True)
     else:
@@ -335,7 +364,14 @@ def render_result(result: dict[str, Any]) -> None:
 
     errors, notices = _warning_summary(result)
     if errors or notices:
-        st.caption(f"本次查询：🔴 {len(errors)} 项错误，🟡 {len(notices)} 项提醒。")
+        tone = "err" if errors else "warn"
+        icon = "✕" if errors else "◔"
+        detail_lines = "；".join((errors + notices)[:3]) or "计算完成，但存在需要留意的项目。"
+        st.markdown(
+            f'<div class="status-banner {tone}"><span class="banner-ico">{icon}</span>'
+            f'<div><b>{"存在错误" if errors else "有提醒"}</b>{detail_lines}</div></div>',
+            unsafe_allow_html=True,
+        )
         with st.expander("查看详情", expanded=False):
             if errors:
                 st.error("\n\n".join(errors))
@@ -459,6 +495,23 @@ div[data-testid="stButton"] button[kind="primary"]:hover:not(:disabled) {
 .tag.neutral{color:#5f7a80;background:#eef4f5;}
 @media(max-width:900px){.prop-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:640px){.prop-grid{grid-template-columns:1fr}}
+/* 物性查询结果状态横幅 */
+.status-banner{display:flex;align-items:center;gap:.6rem;border-radius:10px;padding:.75rem .95rem;margin:.6rem 0 .8rem;font-size:.8rem;line-height:1.5;border:1px solid;}
+.status-banner.ok{background:#eaf7ef;border-color:#ccebd7;color:#175b3c;}
+.status-banner.warn{background:#fff6e5;border-color:#f0dfb0;color:#9b6a13;}
+.status-banner.err{background:#fff0ee;border-color:#f3cfc8;color:#b7473b;}
+.status-banner b{font-weight:750;margin-right:.2rem;}
+.status-banner .banner-ico{width:1.5rem;height:1.5rem;border-radius:8px;display:grid;place-items:center;font-size:.8rem;flex:none;}
+.status-banner.ok .banner-ico{background:#ccebd7;}
+.status-banner.warn .banner-ico{background:#f0dfb0;}
+.status-banner.err .banner-ico{background:#f3cfc8;}
+/* 物性卡增强：顶部色条 + 单位徽章 + 大数值 */
+.prop-card{border-top:3px solid #176b78;}
+.prop-card .prop-label{display:flex;justify-content:space-between;align-items:baseline;gap:.4rem;}
+.prop-unit-badge{background:#eef4f5;color:#5f7a80;border-radius:999px;padding:.18rem .45rem;font-size:.6rem;font-weight:700;letter-spacing:.02em;}
+.prop-card .prop-value{font-size:1.6rem;}
+/* 查询区外壳卡片 */
+.query-shell{background:#fff;border:1px solid #dce8e9;border-radius:12px;padding:1rem 1.1rem .9rem;box-shadow:0 8px 25px rgba(22,61,67,.05);margin:.4rem 0 1rem;}
 </style>
 """, unsafe_allow_html=True)
 if st.query_params.get("aspen_open") == "1":
@@ -622,9 +675,14 @@ st.markdown("<div style='height:.7rem'></div>", unsafe_allow_html=True)
 structured_col, structured_detail_col = st.columns([1, 1], vertical_alignment="top")
 with structured_col:
   with st.popover("＋ 结构化查询", use_container_width=True):
+    st.markdown('<div class="eyebrow" style="margin:.1rem 0 .35rem;">STRUCTURED QUERY</div>', unsafe_allow_html=True)
+    st.caption("按组分、摩尔分数、温度、压力直接查询，不经过语言解析。")
     with st.form("property_query_form", clear_on_submit=False):
-        component_text = st.text_input("组分名称", placeholder="例如：水，乙醇")
-        fractions_text = st.text_input("摩尔分数", placeholder="例如：0.6，0.4（顺序与组分一致）")
+        col_c, col_f = st.columns(2)
+        with col_c:
+            component_text = st.text_input("组分名称", placeholder="例如：水，乙醇")
+        with col_f:
+            fractions_text = st.text_input("摩尔分数", placeholder="例如：0.6，0.4（与组分同序）")
         col_t, col_p = st.columns(2)
         with col_t:
             temperature = st.number_input("温度 (K)", min_value=0.0, value=298.15, step=1.0)
