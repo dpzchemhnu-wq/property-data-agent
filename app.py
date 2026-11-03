@@ -512,6 +512,19 @@ div[data-testid="stButton"] button[kind="primary"]:hover:not(:disabled) {
 .prop-card .prop-value{font-size:1.6rem;}
 /* 查询区外壳卡片 */
 .query-shell{background:#fff;border:1px solid #dce8e9;border-radius:12px;padding:1rem 1.1rem .9rem;box-shadow:0 8px 25px rgba(22,61,67,.05);margin:.4rem 0 1rem;}
+/* 查询工作台卡片(border container)：白底圆角 + 细边框 + 轻阴影 */
+div[data-testid="stVerticalBlockBorderWrapper"]{border:1px solid #dce8e9;border-radius:14px;background:#fff;box-shadow:0 8px 25px rgba(22,61,67,.06);}
+/* 初始页 hero：左上标题 + 右上状态徽章（参考“反应工程工作台”版式） */
+.page-hero{display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;margin:0 0 1.15rem;}
+.page-hero h1{font-size:2.05rem;margin:.2rem 0 .3rem;color:#102b3d;font-weight:750;letter-spacing:0;}
+.page-hero p{margin:0;color:#678087;font-size:.86rem;max-width:780px;line-height:1.55;}
+.hero-badge{display:inline-flex;align-items:center;gap:.5rem;color:#2e5b3e;background:#eaf7ef;border:1px solid #ccebd7;border-radius:999px;padding:.5rem .8rem;font-size:.7rem;font-weight:750;white-space:nowrap;box-shadow:0 3px 10px rgba(23,91,60,.08);}
+.hero-badge .hero-badge-dot{width:.46rem;height:.46rem;border-radius:50%;background:#1aa36b;box-shadow:0 0 0 3px #d9f2e3;flex:none;}
+/* 查询工作台卡片：参数网格 + 分区小标题 */
+.query-workbench{background:#fff;border:1px solid #dce8e9;border-radius:14px;box-shadow:0 8px 25px rgba(22,61,67,.06);padding:1.05rem 1.15rem 1.15rem;margin:.4rem 0 1rem;}
+.query-subhead{color:#66828b;font-size:.64rem;letter-spacing:.08em;font-weight:750;margin:.25rem 0 .55rem;}
+.query-divider{border-top:1px dashed #d5e2e4;margin:1rem 0 .9rem;}
+.query-param-hint{color:#84969a;font-size:.62rem;line-height:1.5;margin-top:.3rem;}
 </style>
 """, unsafe_allow_html=True)
 if st.query_params.get("aspen_open") == "1":
@@ -533,28 +546,19 @@ st.sidebar.markdown("""
 if selected_view == "流程模拟调用":
     render_simulation_page()
     st.stop()
-st.markdown('<div class="hero-title">⚗️ 物性数据查询</div>', unsafe_allow_html=True)
-st.markdown('<div class="hero-caption">描述组分、配比、温度和压力即可查询。系统会整理单位与参数，物性数值由后端计算。</div>', unsafe_allow_html=True)
+st.markdown("""
+<div class="page-hero">
+  <div>
+    <div class="eyebrow" style="margin-bottom:.2rem;">NCKU GESE ASPEN CO-PILOT · 物性模块</div>
+    <h1>⚗️ 物性数据查询</h1>
+    <p>描述组分、配比、温度和压力即可查询。系统会整理单位与参数，物性数值由后端计算。</p>
+  </div>
+  <div class="hero-badge"><span class="hero-badge-dot"></span>本地计算已就绪</div>
+</div>
+""", unsafe_allow_html=True)
 llm_config = _load_llm_config()
 
-with st.expander("选择外部参考数据库", expanded=False):
-    st.caption("thermo/chemicals 本地计算始终作为基准；以下仅控制是否查询外部实验参考值。未勾选的数据库不会发起请求。")
-    selected_reference_sources = st.multiselect(
-        "外部参考源",
-        options=["nist", "thermoml", "coolprop"],
-        default=["nist", "thermoml", "coolprop"],
-        format_func=lambda key: {
-            "nist": "NIST WebBook（纯组分）",
-            "thermoml": "NIST ThermoML（混合体系）",
-            "coolprop": "CoolProp（开源纯流体参考）",
-        }[key],
-        key="selected_reference_sources",
-    )
-    st.caption("PubChem 目前用于名称/CAS 识别，不作为工艺状态点物性数据源；DIPPR、DECHEMA 等需授权的数据未接入，不会以其名义返回数据。CoolProp 只对其覆盖的纯流体返回独立参考值，不覆盖混合物；与 thermo 的偏差只在同单位且参考态可比时计算。")
-
-def query_with_selected_sources(**kwargs: Any) -> dict[str, Any]:
-    """把用户选择的数据源约束注入工具；模型不能自行更改数据源。"""
-    return query_properties(**kwargs, reference_sources=list(selected_reference_sources))
+# 外部参考源选择已移入下方查询工作台卡片；query_with_selected_sources 在其后定义。
 
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
@@ -570,11 +574,29 @@ if "query_notice" not in st.session_state:
 if "input_warning" not in st.session_state:
     st.session_state.input_warning = ""
 
-# 查询记录只保存在会话状态和“查看详情”面板；主页面不渲染历史输入气泡。
-# 这样连续查询时不会把用户之前输入的一条条内容铺在页面上。
-# 自然语言输入与提交居中；结果明细统一收进右侧详情按钮。
-input_col, detail_col = st.columns([10, 1.3], vertical_alignment="bottom")
-with input_col:
+# 查询工作台：外部参考源 + 自然语言查询 + 结构化查询统一收进一张卡片，
+# 查询结果明细统一收进底部一个“查看详情”入口（自然语言与结构化记录合并展示）。
+with st.container(border=True):
+    st.markdown('<div class="query-subhead">REFERENCE SOURCES · 外部参考源</div>', unsafe_allow_html=True)
+    selected_reference_sources = st.multiselect(
+        "外部参考源",
+        options=["nist", "thermoml", "coolprop"],
+        default=["nist", "thermoml", "coolprop"],
+        format_func=lambda key: {
+            "nist": "NIST WebBook（纯组分）",
+            "thermoml": "NIST ThermoML（混合体系）",
+            "coolprop": "CoolProp（开源纯流体参考）",
+        }[key],
+        key="selected_reference_sources",
+    )
+    st.markdown('<div class="query-param-hint">thermo/chemicals 本地计算始终作为基准；未勾选的数据库不会发起请求。PubChem 仅用于名称/CAS 识别；DIPPR、DECHEMA 等授权数据未接入。CoolProp 只对其覆盖的单组分流体返回独立参考值，与 thermo 的偏差只在同单位且参考态可比时计算。</div>', unsafe_allow_html=True)
+
+    def query_with_selected_sources(**kwargs: Any) -> dict[str, Any]:
+        """把用户选择的数据源约束注入工具；模型不能自行更改数据源。"""
+        return query_properties(**kwargs, reference_sources=list(selected_reference_sources))
+
+    st.markdown('<div class="query-divider"></div>', unsafe_allow_html=True)
+    st.markdown('<div class="query-subhead">NATURAL LANGUAGE QUERY · 自然语言查询</div>', unsafe_allow_html=True)
     with st.form("natural_query_form", clear_on_submit=True, border=False):
         prompt_col, button_col = st.columns([8, 1.2], vertical_alignment="bottom")
         with prompt_col:
@@ -585,6 +607,29 @@ with input_col:
             )
         with button_col:
             submitted_prompt = st.form_submit_button("查询", type="primary", use_container_width=True)
+
+    st.markdown('<div class="query-divider"></div>', unsafe_allow_html=True)
+    st.markdown('<div class="query-subhead">STRUCTURED QUERY · 参数直接查询</div>', unsafe_allow_html=True)
+    with st.form("property_query_form", clear_on_submit=False, border=False):
+        col_c, col_f, col_t, col_p = st.columns(4)
+        with col_c:
+            component_text = st.text_input("组分名称", placeholder="例如：水，乙醇")
+            st.markdown('<div class="query-param-hint">支持中文名 / 化学式 / CAS</div>', unsafe_allow_html=True)
+        with col_f:
+            fractions_text = st.text_input("摩尔分数", placeholder="例如：0.6，0.4（与组分同序）")
+            st.markdown('<div class="query-param-hint">与组分一一对应</div>', unsafe_allow_html=True)
+        with col_t:
+            temperature = st.number_input("温度 (K)", min_value=0.0, value=298.15, step=1.0)
+            st.markdown('<div class="query-param-hint">热力学状态点温度</div>', unsafe_allow_html=True)
+        with col_p:
+            pressure = st.number_input("压力 (Pa)", min_value=0.0, value=101325.0, step=1000.0)
+            st.markdown('<div class="query-param-hint">默认 101325 Pa ≈ 1 atm</div>', unsafe_allow_html=True)
+        target_keys = list(TARGET_PROPERTIES)
+        selected_properties = st.multiselect(
+            "仅返回所选物性", options=target_keys,
+            default=target_keys, format_func=lambda key: TARGET_PROPERTIES[key],
+        )
+        submitted_structured = st.form_submit_button("查询物性", type="primary", use_container_width=True)
 
 if submitted_prompt and prompt.strip():
     prompt = prompt.strip()
@@ -645,80 +690,28 @@ if st.session_state.results:
     if notice:
         st.warning(notice)
 
-with detail_col:
-    natural_entries = [
-        entry for entry in st.session_state.results
-        if not (isinstance(entry, dict) and str(entry.get("prompt", "")).startswith("结构化查询："))
-    ]
-    if natural_entries:
-        with st.popover("查看详情", use_container_width=True):
-            normalized_entries = natural_entries
-            if len(normalized_entries) > 1:
-                selected_index = st.selectbox(
-                    "选择查询记录",
-                    options=list(range(len(normalized_entries))),
-                    index=len(normalized_entries) - 1,
-                    format_func=lambda index: normalized_entries[index]["prompt"],
-                    # 记录数变化时生成新 key，确保新查询自动选中最新一条。
-                    key=f"natural_detail_selector_{len(normalized_entries)}",
-                )
-            else:
-                selected_index = 0
-            st.caption(normalized_entries[selected_index]["prompt"])
-            render_result(normalized_entries[selected_index]["result"])
-    else:
-        st.button("查看详情", disabled=True, use_container_width=True)
-
-# 不在主页面渲染查询状态气泡；成功、警告和错误均在对应详情面板中查看。
-
-st.markdown("<div style='height:.7rem'></div>", unsafe_allow_html=True)
-structured_col, structured_detail_col = st.columns([1, 1], vertical_alignment="top")
-with structured_col:
-  with st.popover("＋ 结构化查询", use_container_width=True):
-    st.markdown('<div class="eyebrow" style="margin:.1rem 0 .35rem;">STRUCTURED QUERY</div>', unsafe_allow_html=True)
-    st.caption("按组分、摩尔分数、温度、压力直接查询，不经过语言解析。")
-    with st.form("property_query_form", clear_on_submit=False):
-        col_c, col_f = st.columns(2)
-        with col_c:
-            component_text = st.text_input("组分名称", placeholder="例如：水，乙醇")
-        with col_f:
-            fractions_text = st.text_input("摩尔分数", placeholder="例如：0.6，0.4（与组分同序）")
-        col_t, col_p = st.columns(2)
-        with col_t:
-            temperature = st.number_input("温度 (K)", min_value=0.0, value=298.15, step=1.0)
-        with col_p:
-            pressure = st.number_input("压力 (Pa)", min_value=0.0, value=101325.0, step=1000.0)
-        target_keys = list(TARGET_PROPERTIES)
-        selected_properties = st.multiselect(
-            "仅返回所选物性", options=target_keys,
-            default=target_keys, format_func=lambda key: TARGET_PROPERTIES[key],
-        )
-        submitted_structured = st.form_submit_button("查询物性", type="primary", use_container_width=True)
+# 统一结果入口：自然语言与结构化查询记录合并展示。
+all_entries = list(st.session_state.results)
+if all_entries:
+    with st.popover("查看详情", use_container_width=True):
+        if len(all_entries) > 1:
+            selected_index = st.selectbox(
+                "选择查询记录",
+                options=list(range(len(all_entries))),
+                index=len(all_entries) - 1,
+                format_func=lambda index: all_entries[index]["prompt"],
+                # 记录数变化时生成新 key，确保新查询自动选中最新一条。
+                key=f"all_detail_selector_{len(all_entries)}",
+            )
+        else:
+            selected_index = 0
+        st.caption(all_entries[selected_index]["prompt"])
+        render_result(all_entries[selected_index]["result"])
+else:
+    st.button("查看详情", disabled=True, use_container_width=True)
 
 if st.session_state.input_warning:
     st.warning(st.session_state.input_warning)
-
-with structured_detail_col:
-    structured_entries = [
-        entry for entry in st.session_state.results
-        if isinstance(entry, dict) and str(entry.get("prompt", "")).startswith("结构化查询：")
-    ]
-    if structured_entries:
-        with st.popover("结构化结果详情", use_container_width=True):
-            if len(structured_entries) > 1:
-                selected_structured_index = st.selectbox(
-                    "选择结构化查询记录",
-                    options=list(range(len(structured_entries))),
-                    index=len(structured_entries) - 1,
-                    format_func=lambda index: structured_entries[index]["prompt"],
-                    key=f"structured_detail_selector_{len(structured_entries)}",
-                )
-            else:
-                selected_structured_index = 0
-            st.caption(structured_entries[selected_structured_index]["prompt"])
-            render_result(structured_entries[selected_structured_index]["result"])
-    else:
-        st.button("结构化结果详情", disabled=True, use_container_width=True)
 
 if submitted_structured:
     try:
