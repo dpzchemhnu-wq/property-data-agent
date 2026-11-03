@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import os
 import re
 from typing import Any
@@ -168,6 +169,43 @@ def _coverage_label(nist_status: Any, thermoml_status: Any, pure_component: bool
     return f"参考源状态：NIST WebBook {nist_label} · ThermoML {thermoml_label} · CoolProp {coolprop_label}（详情可展开）"
 
 
+def _coverage_badges(*, pure_component: bool, nist_status: Any, thermoml_status: Any, coolprop_status: Any = None) -> str:
+    """把参考源覆盖状态渲染为一行彩色徽标。"""
+
+    def _badge(name: str, text: str, kind: str) -> str:
+        return f'<span class="ref-badge {kind}"><b>{name}</b>{text}</span>'
+
+    if pure_component:
+        entries = nist_status if isinstance(nist_status, list) else []
+        count = sum(len(item.get("data", {})) for item in entries if isinstance(item, dict))
+        if count:
+            nist_badge = _badge("NIST WebBook", f"{count} 项", "ok")
+        elif entries and all(item.get("applicable") is False for item in entries if isinstance(item, dict)):
+            nist_badge = _badge("NIST WebBook", "未选择", "warn")
+        else:
+            nist_badge = _badge("NIST WebBook", "未命中", "warn")
+        thermoml_badge = _badge("NIST ThermoML", "不适用", "neutral")
+        data = coolprop_status.get("data", {}) if isinstance(coolprop_status, dict) else {}
+        if data:
+            coolprop_badge = _badge("CoolProp", f"{len(data)} 项", "ok")
+        elif isinstance(coolprop_status, dict) and coolprop_status.get("applicable") is False and "未选择" in coolprop_status.get("message", ""):
+            coolprop_badge = _badge("CoolProp", "未选择", "warn")
+        else:
+            coolprop_badge = _badge("CoolProp", "未命中", "warn")
+    else:
+        nist_badge = _badge("NIST WebBook", "不适用", "neutral")
+        thermoml_dict = thermoml_status if isinstance(thermoml_status, dict) else {}
+        thermoml_data = thermoml_dict.get("data", {})
+        if thermoml_dict.get("applicable") is False:
+            thermoml_badge = _badge("NIST ThermoML", "暂不支持", "warn")
+        elif thermoml_data:
+            thermoml_badge = _badge("NIST ThermoML", f"{len(thermoml_data)} 项", "ok")
+        else:
+            thermoml_badge = _badge("NIST ThermoML", "未命中状态点", "warn")
+        coolprop_badge = _badge("CoolProp", "不适用", "neutral")
+    return nist_badge + thermoml_badge + coolprop_badge
+
+
 def render_result(result: dict[str, Any]) -> None:
     """将工具返回的确定数值渲染为并排来源卡；LLM 输出不进入数值卡。"""
     status = result.get("status", "solver_failed")
@@ -196,29 +234,53 @@ def render_result(result: dict[str, Any]) -> None:
         return
 
     model = result["thermo_model"]
-    st.subheader("物性结果")
-    st.markdown(f"**【热力学模型】: {model['label']}**")
-    st.caption(model["decision_basis"] + "。" + model["model_scope"])
-    st.caption(
-        "组分顺序：" + "、".join(item["name"] for item in result["components"])
-        + "；摩尔分数：" + ", ".join(f"{x:.6g}" for x in result["mole_fractions"])
-    )
     nist_status = result.get("references", {}).get("nist", [])
     thermoml_status = result.get("references", {}).get("thermoml", {})
     coolprop_status = result.get("references", {}).get("coolprop", {})
     pure_component = len(result.get("components", [])) == 1
-    model_rows: list[dict[str, str]] = []
     source_rows: dict[str, list[dict[str, str]]] = {"nist": [], "thermoml": [], "coolprop": []}
     source_labels = {"nist": "NIST WebBook", "thermoml": "NIST ThermoML", "coolprop": "CoolProp"}
     requested_properties = result.get("requested_properties", list(result.get("properties", {})))
+
+    # —— 热力学模型卡 ——
+    st.markdown(
+        f'<div class="model-banner"><div><span class="eyebrow">THERMO MODEL</span>'
+        f'<div class="model-title">{html.escape(str(model["label"]))}</div>'
+        f'<div class="model-meta">{html.escape(str(model["decision_basis"]))}；{html.escape(str(model["model_scope"]))}</div></div>'
+        '<span class="tag ok">● 已计算</span></div>',
+        unsafe_allow_html=True,
+    )
+
+    # —— 组分与摩尔分数 chips ——
+    component_chips = [
+        f'<span class="comp-chip"><b>{html.escape(str(comp.get("name", "")))}</b>　x={fraction:.6g}</span>'
+        for comp, fraction in zip(result.get("components", []), result.get("mole_fractions", []))
+    ]
+    st.markdown(f'<div class="comp-strip"><span class="comp-strip-label">组分与摩尔分数</span>{"".join(component_chips)}</div>', unsafe_allow_html=True)
+
+    # —— 物性 KPI 卡片网格 ——
+    property_cards: list[str] = []
     for key in requested_properties:
         label = TARGET_PROPERTIES.get(key, key)
         item = result["properties"].get(key)
         if not item:
             continue
-        property_label = f"{label} ({item.get('unit', '')})"
+        property_label = f"{label} ({item.get('unit', '')})" if item.get("unit") else label
         model_source = ", ".join(item.get("source_ids", [])) or "thermo"
-        model_rows.append({"物性（单位）": property_label, "thermo 模型值": _bare_value(item.get("value")), "计算来源": model_source})
+        badges = [f'<span class="tag neutral">{html.escape(model_source)}</span>']
+        for source in ("nist", "thermoml", "coolprop"):
+            reference = _reference_for(item, source)
+            deviation = item.get("relative_deviation_pct_by_source", {}).get(source)
+            if reference is not None and deviation is not None:
+                flagged = bool(item.get("deviation_warning_by_source", {}).get(source))
+                kind = "bad" if flagged else "neutral"
+                mark = " ⚠" if flagged else ""
+                badges.append(f'<span class="tag {kind}">vs {source_labels[source]} {deviation:.2f}%{mark}</span>')
+        property_cards.append(
+            f'<div class="prop-card"><span class="prop-label">{html.escape(property_label)}</span>'
+            f'<div class="prop-value">{html.escape(_bare_value(item.get("value")))}</div>'
+            f'<div class="prop-meta">{"".join(badges)}</div></div>'
+        )
         for source in ("nist", "thermoml", "coolprop"):
             reference = _reference_for(item, source)
             deviation = item.get("relative_deviation_pct_by_source", {}).get(source)
@@ -234,15 +296,18 @@ def render_result(result: dict[str, Any]) -> None:
                 "不确定度核对": uncertainty_label,
                 "来源标识": (reference.get("doi") or reference.get("source_id") or "—") if reference else "—",
             })
-    st.dataframe(model_rows, width="stretch", hide_index=True)
+    if property_cards:
+        st.markdown(f'<div class="prop-grid">{"".join(property_cards)}</div>', unsafe_allow_html=True)
+
+    # —— 参考源覆盖状态徽标 ——
     if pure_component:
         nist_errors = [item.get("message", "") for item in nist_status if isinstance(item, dict) and item.get("unavailable")]
         if nist_errors:
             st.caption("参考源状态：NIST WebBook 连接失败（此次无法判断是否覆盖）；ThermoML 不适用。")
         else:
-            st.caption(_coverage_label(nist_status, thermoml_status, pure_component, coolprop_status))
+            st.markdown(f'<div class="ref-strip"><span class="eyebrow">REFERENCE SOURCES</span>{_coverage_badges(pure_component=pure_component, nist_status=nist_status, thermoml_status=thermoml_status, coolprop_status=coolprop_status)}</div>', unsafe_allow_html=True)
     else:
-        st.caption(_coverage_label(nist_status, thermoml_status, pure_component, coolprop_status))
+        st.markdown(f'<div class="ref-strip"><span class="eyebrow">REFERENCE SOURCES</span>{_coverage_badges(pure_component=pure_component, nist_status=nist_status, thermoml_status=thermoml_status, coolprop_status=coolprop_status)}</div>', unsafe_allow_html=True)
     for source in ("nist", "thermoml", "coolprop"):
         applicable = not (source in {"nist", "coolprop"} and not pure_component) and not (
             source == "thermoml" and pure_component
@@ -371,6 +436,29 @@ div[data-testid="stButton"] button[kind="primary"]:hover:not(:disabled) {
 .case-grid .wide {grid-column:span 2;}.case-grid .action {display:flex;gap:.45rem;align-items:end;}.case-grid button {border:1px solid #176b78;border-radius:7px;padding:.5rem .65rem;background:#176b78;color:white;font-weight:700;font-size:.72rem;cursor:pointer;}
 .case-list {border-top:1px solid #e8efef;margin-top:.9rem;padding-top:.7rem;}.case-row {display:grid;grid-template-columns:2.6fr 1fr .6fr .8fr .9fr .45fr;gap:.5rem;align-items:center;padding:.65rem .5rem;border-bottom:1px solid #eef3f3;font-size:.72rem;}.case-row.header {color:#678087;font-size:.63rem;font-weight:700;background:#f7fafa;}.case-row:last-child{border-bottom:0}.case-row.selected{background:#f2f9f8;border-radius:7px}.case-path{display:block;color:#84969a;font-size:.61rem;margin-top:.18rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.tag{display:inline-block;border-radius:999px;padding:.27rem .42rem;font-size:.6rem;font-weight:700}.tag.ok{color:#18834c;background:#e9f7ef}.tag.warn{color:#9b6a13;background:#fff6e5}.tag.bad{color:#b7473b;background:#fff0ee}.case-row input[type=radio]{accent-color:#176b78}
 @media(max-width:900px){.case-grid{grid-template-columns:repeat(2,1fr)}.case-grid .wide{grid-column:span 2}.case-row{grid-template-columns:2fr 1fr .6fr .8fr}.case-row .hide-small{display:none}}
+.prop-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.75rem;margin:.9rem 0 .6rem;}
+.prop-card{background:#fff;border:1px solid #dce8e9;border-radius:12px;padding:.9rem .95rem;box-shadow:0 6px 18px rgba(22,61,67,.05);}
+.prop-label{display:block;color:#678087;font-size:.72rem;margin-bottom:.35rem;}
+.prop-value{font-size:1.5rem;font-weight:750;color:#173239;line-height:1.15;letter-spacing:.01em;}
+.prop-meta{margin-top:.5rem;display:flex;flex-wrap:wrap;gap:.35rem;align-items:center;}
+.model-banner{display:flex;justify-content:space-between;align-items:center;gap:1rem;background:#fff;border:1px solid #dce8e9;border-left:4px solid #176b78;border-radius:10px;padding:.85rem 1rem;margin:.5rem 0 .6rem;box-shadow:0 6px 18px rgba(22,61,67,.05);}
+.model-title{font-size:1.05rem;font-weight:750;color:#173239;margin:.2rem 0 .15rem;}
+.model-meta{color:#678087;font-size:.72rem;line-height:1.55;}
+.comp-strip{display:flex;align-items:center;gap:.45rem;flex-wrap:wrap;margin:.4rem 0 .5rem;}
+.comp-strip-label{color:#678087;font-size:.68rem;font-weight:700;margin-right:.2rem;}
+.comp-chip{background:#f0f7f7;border:1px solid #d2e4e6;color:#173239;border-radius:999px;padding:.34rem .6rem;font-size:.72rem;}
+.comp-chip b{color:#176b78;}
+.ref-strip{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin:.5rem 0 .7rem;}
+.ref-strip .eyebrow{margin-right:.35rem;}
+.ref-badge{display:inline-flex;align-items:center;gap:.4rem;border-radius:999px;padding:.34rem .6rem;font-size:.68rem;font-weight:700;border:1px solid;}
+.ref-badge b{font-weight:800;}
+.ref-badge.ok{color:#18834c;background:#e9f7ef;border-color:#ccebd7;}
+.ref-badge.warn{color:#9b6a13;background:#fff6e5;border-color:#f0dfb0;}
+.ref-badge.bad{color:#b7473b;background:#fff0ee;border-color:#f3cfc8;}
+.ref-badge.neutral{color:#5f7a80;background:#eef4f5;border-color:#d9e6e8;}
+.tag.neutral{color:#5f7a80;background:#eef4f5;}
+@media(max-width:900px){.prop-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:640px){.prop-grid{grid-template-columns:1fr}}
 </style>
 """, unsafe_allow_html=True)
 if st.query_params.get("aspen_open") == "1":
